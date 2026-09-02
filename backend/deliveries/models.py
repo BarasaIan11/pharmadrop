@@ -1,7 +1,18 @@
+import base64
+import hashlib
 import random
 import uuid
+from django.conf import settings
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from cryptography.fernet import Fernet
+
+
+# Symmetric Encryption Helper derived from Django SECRET_KEY
+def get_fernet_cipher():
+    key_bytes = hashlib.sha256(settings.SECRET_KEY.encode('utf-8')).digest()
+    fernet_key = base64.urlsafe_b64encode(key_bytes)
+    return Fernet(fernet_key)
 
 
 class UserRole(models.TextChoices):
@@ -20,6 +31,23 @@ class DeliveryStatus(models.TextChoices):
     CANCELLED = 'CANCELLED', 'Cancelled'
 
 
+class Pharmacy(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=150)
+    code = models.CharField(max_length=50, unique=True) # e.g. MED-NRB-01
+    address = models.TextField()
+    phone = models.CharField(max_length=20)
+    logo_url = models.URLField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name_plural = 'Pharmacies'
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+
 class User(AbstractUser):
     role = models.CharField(
         max_length=20,
@@ -27,9 +55,17 @@ class User(AbstractUser):
         default=UserRole.CUSTOMER
     )
     phone_number = models.CharField(max_length=20, blank=True, null=True)
+    pharmacy = models.ForeignKey(
+        Pharmacy,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='users'
+    )
 
     def __str__(self):
-        return f"{self.username} ({self.get_role_display()})"
+        pharmacy_str = f" @ {self.pharmacy.name}" if self.pharmacy else ""
+        return f"{self.username} ({self.get_role_display()}){pharmacy_str}"
 
 
 class RiderProfile(models.Model):
@@ -52,6 +88,13 @@ class RiderProfile(models.Model):
 class Delivery(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order_number = models.CharField(max_length=20, unique=True, editable=False)
+    pharmacy = models.ForeignKey(
+        Pharmacy,
+        on_delete=models.CASCADE,
+        related_name='deliveries',
+        null=True,
+        blank=True
+    )
     customer = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -78,7 +121,10 @@ class Delivery(models.Model):
         choices=DeliveryStatus.choices,
         default=DeliveryStatus.PENDING
     )
-    confirmation_code = models.CharField(max_length=4)
+    
+    # Store AES Encrypted Code at rest in Database
+    encrypted_code = models.CharField(max_length=255, blank=True, default='')
+
     assigned_rider = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -96,12 +142,31 @@ class Delivery(models.Model):
     class Meta:
         ordering = ['-created_at']
 
+    @property
+    def confirmation_code(self):
+        if not self.encrypted_code:
+            return ""
+        try:
+            cipher = get_fernet_cipher()
+            decrypted = cipher.decrypt(self.encrypted_code.encode('utf-8')).decode('utf-8')
+            return decrypted
+        except Exception:
+            return ""
+
+    @confirmation_code.setter
+    def confirmation_code(self, raw_code):
+        if raw_code:
+            cipher = get_fernet_cipher()
+            encrypted_bytes = cipher.encrypt(str(raw_code).encode('utf-8'))
+            self.encrypted_code = encrypted_bytes.decode('utf-8')
+
     def save(self, *args, **kwargs):
         if not self.order_number:
             random_digits = random.randint(1000, 9999)
             self.order_number = f"#PD-{random_digits}"
-        if not self.confirmation_code:
-            self.confirmation_code = f"{random.randint(1000, 9999)}"
+        if not self.encrypted_code:
+            raw_code = f"{random.randint(1000, 9999)}"
+            self.confirmation_code = raw_code
         super().save(*args, **kwargs)
 
     def __str__(self):
