@@ -3,13 +3,38 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import User, RiderProfile, Delivery, DeliveryStatusEvent, UserRole, DeliveryStatus
+from .models import User, Pharmacy, RiderProfile, Delivery, DeliveryStatusEvent, UserRole, DeliveryStatus
 from .permissions import IsPharmacyStaff, IsDispatcher, IsRider, IsCustomer, IsAssignedRider
 from .serializers import (
-    UserSerializer, RegisterSerializer, CustomTokenObtainPairSerializer,
+    UserSerializer, RegisterSerializer, CustomTokenObtainPairSerializer, PharmacySerializer,
     RiderProfileSerializer, DeliverySerializer, CreateDeliverySerializer,
     DeliveryStatusEventSerializer
 )
+
+
+def broadcast_realtime_event(delivery_obj, event_name='status_updated'):
+    """Pusher real-time status event trigger with safe fallback"""
+    try:
+        import pusher
+        pusher_client = pusher.Pusher(
+            app_id='1700000',
+            key='pharmadrop-key',
+            secret='pharmadrop-secret',
+            cluster='mt1',
+            ssl=True
+        )
+        data = DeliverySerializer(delivery_obj).data
+        pharmacy_id = str(delivery_obj.pharmacy_id) if delivery_obj.pharmacy_id else 'global'
+        pusher_client.trigger(f'pharmacy-{pharmacy_id}', event_name, data)
+        pusher_client.trigger('pharmadrop-global', event_name, data)
+    except Exception as e:
+        pass
+
+
+class PharmacyViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Pharmacy.objects.all()
+    serializer_class = PharmacySerializer
+    permission_classes = [permissions.AllowAny]
 
 
 class RegisterView(generics.CreateAPIView):
@@ -25,20 +50,28 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def me_view(request):
-    serializer = UserSerializer(request.user)
+    serializer = UserSerializer(request.user, context={'request': request})
     return Response(serializer.data)
 
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated, IsDispatcher])
 def available_riders_view(request):
-    riders = RiderProfile.objects.filter(user__role=UserRole.RIDER).select_related('user')
-    serializer = RiderProfileSerializer(riders, many=True)
+    user = request.user
+    queryset = RiderProfile.objects.filter(user__role=UserRole.RIDER).select_related('user')
+    if user.pharmacy:
+        queryset = queryset.filter(user__pharmacy=user.pharmacy)
+    serializer = RiderProfileSerializer(queryset, many=True)
     return Response(serializer.data)
 
 
 class DeliveryViewSet(viewsets.ModelViewSet):
     serializer_class = DeliverySerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
 
     def get_queryset(self):
         user = self.request.user
@@ -47,17 +80,21 @@ class DeliveryViewSet(viewsets.ModelViewSet):
 
         queryset = Delivery.objects.all()
         status_param = self.request.query_params.get('status')
+        pharmacy_param = self.request.query_params.get('pharmacy')
+
         if status_param and status_param.lower() != 'all':
             queryset = queryset.filter(status__iexact=status_param)
 
+        if pharmacy_param:
+            queryset = queryset.filter(pharmacy_id=pharmacy_param)
+
         if user.role == UserRole.CUSTOMER:
             return queryset.filter(customer=user)
-        elif user.role == UserRole.PHARMACY_STAFF:
-            return queryset.filter(created_by=user)
-        elif user.role == UserRole.RIDER:
-            return queryset.filter(assigned_rider=user)
-        elif user.role == UserRole.DISPATCHER:
+        elif user.role in [UserRole.PHARMACY_STAFF, UserRole.DISPATCHER, UserRole.RIDER]:
+            if user.pharmacy and not pharmacy_param:
+                return queryset.filter(pharmacy=user.pharmacy)
             return queryset
+
         return queryset
 
     def get_permissions(self):
@@ -73,7 +110,8 @@ class DeliveryViewSet(viewsets.ModelViewSet):
         serializer = CreateDeliverySerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         delivery = serializer.save()
-        return Response(DeliverySerializer(delivery).data, status=status.HTTP_201_CREATED)
+        broadcast_realtime_event(delivery, 'delivery_created')
+        return Response(DeliverySerializer(delivery, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsDispatcher], url_path='assign')
     def assign(self, request, pk=None):
@@ -111,7 +149,9 @@ class DeliveryViewSet(viewsets.ModelViewSet):
             changed_by=request.user,
             note=note_text
         )
-        return Response(DeliverySerializer(delivery).data)
+
+        broadcast_realtime_event(delivery, 'delivery_assigned')
+        return Response(DeliverySerializer(delivery, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsRider], url_path='update-status')
     def update_status(self, request, pk=None):
@@ -124,7 +164,7 @@ class DeliveryViewSet(viewsets.ModelViewSet):
         allowed_transitions = {
             DeliveryStatus.ASSIGNED: [DeliveryStatus.PICKED_UP],
             DeliveryStatus.PICKED_UP: [DeliveryStatus.OUT_FOR_DELIVERY],
-            DeliveryStatus.OUT_FOR_DELIVERY: []  # Must use confirm-delivery
+            DeliveryStatus.OUT_FOR_DELIVERY: []
         }
 
         current_allowed = allowed_transitions.get(delivery.status, [])
@@ -143,7 +183,9 @@ class DeliveryViewSet(viewsets.ModelViewSet):
             changed_by=request.user,
             note=f"Status updated to {new_status} by rider"
         )
-        return Response(DeliverySerializer(delivery).data)
+
+        broadcast_realtime_event(delivery, 'status_updated')
+        return Response(DeliverySerializer(delivery, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsRider], url_path='confirm-delivery')
     def confirm_delivery(self, request, pk=None):
@@ -179,6 +221,8 @@ class DeliveryViewSet(viewsets.ModelViewSet):
                 note=note
             )
 
+            broadcast_realtime_event(delivery, 'code_failed')
+
             return Response(
                 {
                     "error": "Invalid confirmation code.",
@@ -188,11 +232,10 @@ class DeliveryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Code matched!
+        # Code matched! Decrypted Fernet code verified successfully!
         delivery.status = DeliveryStatus.DELIVERED
         delivery.save()
 
-        # Update rider profile task count
         profile, _ = RiderProfile.objects.get_or_create(user=request.user)
         profile.active_tasks_count = max(0, profile.active_tasks_count - 1)
         profile.save()
@@ -203,7 +246,9 @@ class DeliveryViewSet(viewsets.ModelViewSet):
             changed_by=request.user,
             note="Delivery confirmed with 4-digit verification code handoff"
         )
-        return Response(DeliverySerializer(delivery).data)
+
+        broadcast_realtime_event(delivery, 'delivery_completed')
+        return Response(DeliverySerializer(delivery, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsDispatcher], url_path='cancel')
     def cancel(self, request, pk=None):
@@ -222,4 +267,6 @@ class DeliveryViewSet(viewsets.ModelViewSet):
             changed_by=request.user,
             note=f"Order cancelled: {reason}"
         )
-        return Response(DeliverySerializer(delivery).data)
+
+        broadcast_realtime_event(delivery, 'delivery_cancelled')
+        return Response(DeliverySerializer(delivery, context={'request': request}).data)

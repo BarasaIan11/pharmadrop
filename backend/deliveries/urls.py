@@ -3,10 +3,11 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     RegisterView, CustomTokenObtainPairView, me_view,
-    available_riders_view, DeliveryViewSet
+    available_riders_view, DeliveryViewSet, PharmacyViewSet
 )
 
 router = DefaultRouter()
+router.register(r'pharmacies', PharmacyViewSet, basename='pharmacy')
 router.register(r'deliveries', DeliveryViewSet, basename='delivery')
 
 urlpatterns = [

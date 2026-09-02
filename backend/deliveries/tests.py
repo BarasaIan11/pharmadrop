@@ -1,25 +1,32 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework import status
-from deliveries.models import User, Delivery, DeliveryStatusEvent, UserRole, DeliveryStatus, RiderProfile
+from deliveries.models import User, Pharmacy, Delivery, DeliveryStatusEvent, UserRole, DeliveryStatus, RiderProfile
 
 
 class PharmaDropAPITestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
 
-        # Create Users for each role
+        self.pharmacy = Pharmacy.objects.create(
+            name='Test Pharmacy',
+            code='MED-TEST-01',
+            address='123 Hospital Way',
+            phone='+254700000000'
+        )
+
+        # Create Users for each role with pharmacy tenancy
         self.customer = User.objects.create_user(
             username='cust1', password='password123', role=UserRole.CUSTOMER, phone_number='+254711'
         )
         self.staff = User.objects.create_user(
-            username='staff1', password='password123', role=UserRole.PHARMACY_STAFF, phone_number='+254722'
+            username='staff1', password='password123', role=UserRole.PHARMACY_STAFF, phone_number='+254722', pharmacy=self.pharmacy
         )
         self.dispatcher = User.objects.create_user(
-            username='dispatch1', password='password123', role=UserRole.DISPATCHER, phone_number='+254733'
+            username='dispatch1', password='password123', role=UserRole.DISPATCHER, phone_number='+254733', pharmacy=self.pharmacy
         )
         self.rider = User.objects.create_user(
-            username='rider1', password='password123', role=UserRole.RIDER, phone_number='+254744'
+            username='rider1', password='password123', role=UserRole.RIDER, phone_number='+254744', pharmacy=self.pharmacy
         )
         RiderProfile.objects.create(user=self.rider, is_available=True)
 
@@ -47,12 +54,14 @@ class PharmaDropAPITestCase(TestCase):
         self.assertEqual(len(response.data['confirmation_code']), 4)
 
     def test_dispatcher_assigns_rider(self):
-        # Create pending delivery
-        delivery = Delivery.objects.create(
-            customer=self.customer, created_by=self.staff,
+        delivery = Delivery(
+            customer=self.customer, created_by=self.staff, pharmacy=self.pharmacy,
             item_description='Test Meds', delivery_address='Nairobi',
-            customer_phone='+254711', confirmation_code='1234'
+            customer_phone='+254711'
         )
+        delivery.confirmation_code = '1234'
+        delivery.save()
+
         self.client.force_authenticate(user=self.dispatcher)
         response = self.client.post(f'/api/deliveries/{delivery.id}/assign/', {
             'rider_id': str(self.rider.id)
@@ -62,12 +71,15 @@ class PharmaDropAPITestCase(TestCase):
         self.assertEqual(response.data['assigned_rider'], self.rider.id)
 
     def test_rider_pin_verification_and_3_attempt_lockout(self):
-        delivery = Delivery.objects.create(
-            customer=self.customer, created_by=self.staff,
+        delivery = Delivery(
+            customer=self.customer, created_by=self.staff, pharmacy=self.pharmacy,
             item_description='Test Meds', delivery_address='Nairobi',
-            customer_phone='+254711', confirmation_code='4321',
+            customer_phone='+254711',
             assigned_rider=self.rider, status=DeliveryStatus.OUT_FOR_DELIVERY
         )
+        delivery.confirmation_code = '4321'
+        delivery.save()
+
         self.client.force_authenticate(user=self.rider)
 
         # Attempt 1: Mismatch
@@ -97,12 +109,15 @@ class PharmaDropAPITestCase(TestCase):
         self.assertIn("locked", res4.data['error'].lower())
 
     def test_rider_successful_pin_confirmation(self):
-        delivery = Delivery.objects.create(
-            customer=self.customer, created_by=self.staff,
+        delivery = Delivery(
+            customer=self.customer, created_by=self.staff, pharmacy=self.pharmacy,
             item_description='Test Meds', delivery_address='Nairobi',
-            customer_phone='+254711', confirmation_code='9876',
+            customer_phone='+254711',
             assigned_rider=self.rider, status=DeliveryStatus.OUT_FOR_DELIVERY
         )
+        delivery.confirmation_code = '9876'
+        delivery.save()
+
         self.client.force_authenticate(user=self.rider)
         res = self.client.post(f'/api/deliveries/{delivery.id}/confirm-delivery/', {'code': '9876'})
         self.assertEqual(res.status_code, status.HTTP_200_OK)
