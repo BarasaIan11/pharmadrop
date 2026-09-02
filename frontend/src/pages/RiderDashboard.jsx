@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { deliveryAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { usePusherDelivery } from '../hooks/usePusherDelivery';
 import {
   Bell, Cross, MapPin, Phone, CheckCircle2, AlertTriangle,
   Bike, Clock, ArrowRight, KeyRound, RefreshCw, PackageCheck
@@ -25,6 +27,7 @@ const RiderDashboard = () => {
   const [pinCode, setPinCode] = useState('');
   const [pinError, setPinError] = useState('');
   const [pinSuccess, setPinSuccess] = useState('');
+  const { user } = useAuth();
 
   const fetchDeliveries = useCallback(async () => {
     setLoading(true);
@@ -50,6 +53,32 @@ const RiderDashboard = () => {
     const interval = setInterval(fetchDeliveries, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Pusher real-time: update rider's own tasks as dispatcher assigns or status changes
+  usePusherDelivery({
+    pharmacyId: user?.pharmacy,
+    onUpdate: useCallback((updatedDelivery) => {
+      const ACTIVE = ['ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY'];
+      setDeliveries((prev) => {
+        // Remove if no longer active
+        if (!ACTIVE.includes(updatedDelivery.status)) {
+          return prev.filter((d) => d.id !== updatedDelivery.id);
+        }
+        // Update existing or prepend if newly assigned to this rider
+        const exists = prev.find((d) => d.id === updatedDelivery.id);
+        if (exists) {
+          return prev.map((d) => d.id === updatedDelivery.id ? { ...d, ...updatedDelivery } : d);
+        }
+        if (updatedDelivery.assigned_rider === user?.id) {
+          return [updatedDelivery, ...prev];
+        }
+        return prev;
+      });
+      setSelectedDelivery((prev) =>
+        prev?.id === updatedDelivery.id ? { ...prev, ...updatedDelivery } : prev
+      );
+    }, [user?.id]),
+  });
 
   const handleUpdateStatus = async (delivery, nextStatus) => {
     setUpdating(true);

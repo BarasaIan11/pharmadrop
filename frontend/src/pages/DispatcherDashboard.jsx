@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { deliveryAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { usePusherDelivery } from '../hooks/usePusherDelivery';
 import {
   Bell, Cross, Users, Bike, ChevronDown, Search, MapPin, Clock,
   AlertTriangle, CheckCircle2, PackageCheck, Thermometer, RefreshCw, X, UserCheck
@@ -18,10 +20,11 @@ const DispatcherDashboard = () => {
   const [deliveries, setDeliveries] = useState([]);
   const [riders, setRiders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [assigning, setAssigning] = useState(null); // delivery id being assigned
+  const [assigning, setAssigning] = useState(null);
   const [selectedRider, setSelectedRider] = useState({});
   const [statusFilter, setStatusFilter] = useState('PENDING');
   const [searchQuery, setSearchQuery] = useState('');
+  const { user } = useAuth();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -46,6 +49,20 @@ const DispatcherDashboard = () => {
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Pusher real-time: merge changed delivery into local state immediately
+  usePusherDelivery({
+    pharmacyId: user?.pharmacy,
+    onUpdate: useCallback((updatedDelivery) => {
+      setDeliveries((prev) => {
+        const exists = prev.find((d) => d.id === updatedDelivery.id);
+        if (exists) {
+          return prev.map((d) => d.id === updatedDelivery.id ? { ...d, ...updatedDelivery } : d);
+        }
+        return [updatedDelivery, ...prev]; // new delivery from another staff member
+      });
+    }, []),
+  });
 
   const handleAssign = async (deliveryId) => {
     const riderId = selectedRider[deliveryId];

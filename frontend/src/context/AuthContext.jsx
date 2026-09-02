@@ -1,14 +1,23 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authAPI } from '../services/api';
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('user_info');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('user_info');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
   });
   const [loading, setLoading] = useState(true);
+
+  const saveUser = useCallback((userData) => {
+    setUser(userData);
+    localStorage.setItem('user_info', JSON.stringify(userData));
+  }, []);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -16,10 +25,9 @@ export const AuthProvider = ({ children }) => {
       if (token) {
         try {
           const res = await authAPI.getMe();
-          setUser(res.data);
-          localStorage.setItem('user_info', JSON.stringify(res.data));
+          saveUser(res.data);
         } catch (err) {
-          console.error('Session expired:', err);
+          console.error('Session expired or invalid:', err);
           logout();
         }
       }
@@ -33,8 +41,7 @@ export const AuthProvider = ({ children }) => {
     const { access, refresh, user: userData } = res.data;
     localStorage.setItem('access_token', access);
     localStorage.setItem('refresh_token', refresh);
-    localStorage.setItem('user_info', JSON.stringify(userData));
-    setUser(userData);
+    saveUser(userData);
     return userData;
   };
 
@@ -43,15 +50,19 @@ export const AuthProvider = ({ children }) => {
     return login(formData.username, formData.password);
   };
 
+  /**
+   * Quick demo login. Maps a role key to a seeded demo account.
+   * Each demo account has a different pharmacy tenant for multi-tenant demonstration.
+   */
   const quickLogin = async (roleName) => {
-    const roleUsernames = {
-      CUSTOMER: 'customer1',
-      PHARMACY_STAFF: 'staff1',
-      DISPATCHER: 'dispatcher1',
-      RIDER: 'rider1'
+    const demoAccounts = {
+      CUSTOMER:       { username: 'customer1',   label: 'Esther Wanjiku (Customer)' },
+      PHARMACY_STAFF: { username: 'staff1',      label: 'Pharmacy Staff @ Nairobi Central' },
+      DISPATCHER:     { username: 'dispatcher1', label: 'Dispatcher @ Nairobi Central' },
+      RIDER:          { username: 'rider1',      label: 'David Kamau (Rider)' },
     };
-    const username = roleUsernames[roleName] || 'customer1';
-    return login(username, 'password123');
+    const account = demoAccounts[roleName] || demoAccounts.CUSTOMER;
+    return login(account.username, 'password123');
   };
 
   const logout = () => {
@@ -61,8 +72,20 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
+  /** Derived helpers for easy consumption in components */
+  const isCustomer       = user?.role === 'CUSTOMER';
+  const isPharmacyStaff  = user?.role === 'PHARMACY_STAFF';
+  const isDispatcher     = user?.role === 'DISPATCHER';
+  const isRider          = user?.role === 'RIDER';
+  const pharmacyName     = user?.pharmacy_detail?.name || null;
+  const pharmacyCode     = user?.pharmacy_detail?.code || null;
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, quickLogin, logout }}>
+    <AuthContext.Provider value={{
+      user, loading, login, register, quickLogin, logout, saveUser,
+      isCustomer, isPharmacyStaff, isDispatcher, isRider,
+      pharmacyName, pharmacyCode,
+    }}>
       {children}
     </AuthContext.Provider>
   );

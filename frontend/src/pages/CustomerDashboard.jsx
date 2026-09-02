@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { deliveryAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { usePusherDelivery } from '../hooks/usePusherDelivery';
 import StatusTimeline from '../components/StatusTimeline';
 import { 
   Bell, User, ChevronLeft, HelpCircle, Phone, MapPin, Clock, 
@@ -10,17 +12,14 @@ import {
 const CustomerDashboard = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [deliveries, setDeliveries] = useState([]);
   const [selectedDelivery, setSelectedDelivery] = useState(null);
   const [loading, setLoading] = useState(true);
   const [pastOpen, setPastOpen] = useState(false);
 
-  useEffect(() => {
-    fetchDeliveries();
-  }, [id]);
-
-  const fetchDeliveries = async () => {
+  const fetchDeliveries = useCallback(async () => {
     setLoading(true);
     try {
       const res = await deliveryAPI.getDeliveries();
@@ -38,7 +37,24 @@ const CustomerDashboard = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    fetchDeliveries();
+  }, [fetchDeliveries]);
+
+  // Real-time Pusher updates: merge changed delivery in-place
+  usePusherDelivery({
+    pharmacyId: user?.pharmacy,
+    onUpdate: useCallback((updatedDelivery) => {
+      setDeliveries((prev) =>
+        prev.map((d) => d.id === updatedDelivery.id ? { ...d, ...updatedDelivery } : d)
+      );
+      setSelectedDelivery((prev) =>
+        prev?.id === updatedDelivery.id ? { ...prev, ...updatedDelivery } : prev
+      );
+    }, []),
+  });
 
   const activeDeliveries = deliveries.filter((d) => d.status !== 'DELIVERED' && d.status !== 'CANCELLED');
   const pastDeliveries = deliveries.filter((d) => d.status === 'DELIVERED' || d.status === 'CANCELLED');
