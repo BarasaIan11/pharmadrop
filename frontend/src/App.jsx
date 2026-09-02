@@ -1,122 +1,153 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import RoleSwitcherBar from './components/RoleSwitcherBar';
+
+import LoginPage from './pages/LoginPage';
+import CustomerDashboard from './pages/CustomerDashboard';
+import PharmacyDashboard from './pages/PharmacyDashboard';
+import DispatcherDashboard from './pages/DispatcherDashboard';
+import RiderDashboard from './pages/RiderDashboard';
+
+// Role-based Route Guard
+const ProtectedRoute = ({ children, allowedRoles }) => {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 text-sm">
+        Loading PharmaDrop...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    // Redirect to default route for user's role
+    if (user.role === 'CUSTOMER') return <Navigate to="/customer/orders" replace />;
+    if (user.role === 'PHARMACY_STAFF') return <Navigate to="/pharmacy/new-delivery" replace />;
+    if (user.role === 'DISPATCHER') return <Navigate to="/dispatcher/unassigned" replace />;
+    if (user.role === 'RIDER') return <Navigate to="/rider/deliveries" replace />;
+  }
+
+  return children;
+};
+
+// Main Redirector for Root '/'
+const RootRedirect = () => {
+  const { user, loading } = useAuth();
+
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+
+  if (user.role === 'CUSTOMER') return <Navigate to="/customer/orders" replace />;
+  if (user.role === 'PHARMACY_STAFF') return <Navigate to="/pharmacy/new-delivery" replace />;
+  if (user.role === 'DISPATCHER') return <Navigate to="/dispatcher/unassigned" replace />;
+  if (user.role === 'RIDER') return <Navigate to="/rider/deliveries" replace />;
+
+  return <Navigate to="/login" replace />;
+};
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <AuthProvider>
+      <Router>
+        <div className="min-h-screen flex flex-col bg-slate-100">
+          {/* Top Demo Quick-Role Switcher Header Bar */}
+          <RoleSwitcherBar />
 
-      <div className="ticks"></div>
+          <div className="flex-1">
+            <Routes>
+              {/* Public Auth Route */}
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<LoginPage />} />
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+              {/* Customer Routes */}
+              <Route
+                path="/customer/orders"
+                element={
+                  <ProtectedRoute allowedRoles={['CUSTOMER', 'DISPATCHER', 'PHARMACY_STAFF']}>
+                    <CustomerDashboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/customer/orders/:id"
+                element={
+                  <ProtectedRoute allowedRoles={['CUSTOMER', 'DISPATCHER', 'PHARMACY_STAFF']}>
+                    <CustomerDashboard />
+                  </ProtectedRoute>
+                }
+              />
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+              {/* Pharmacy Staff Routes */}
+              <Route
+                path="/pharmacy/new-delivery"
+                element={
+                  <ProtectedRoute allowedRoles={['PHARMACY_STAFF', 'DISPATCHER']}>
+                    <PharmacyDashboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/pharmacy/deliveries"
+                element={
+                  <ProtectedRoute allowedRoles={['PHARMACY_STAFF', 'DISPATCHER']}>
+                    <PharmacyDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Dispatcher Routes */}
+              <Route
+                path="/dispatcher/unassigned"
+                element={
+                  <ProtectedRoute allowedRoles={['DISPATCHER']}>
+                    <DispatcherDashboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dispatcher/deliveries"
+                element={
+                  <ProtectedRoute allowedRoles={['DISPATCHER']}>
+                    <DispatcherDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Rider Routes */}
+              <Route
+                path="/rider/deliveries"
+                element={
+                  <ProtectedRoute allowedRoles={['RIDER', 'DISPATCHER']}>
+                    <RiderDashboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/rider/deliveries/:id"
+                element={
+                  <ProtectedRoute allowedRoles={['RIDER', 'DISPATCHER']}>
+                    <RiderDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Default Index Route */}
+              <Route path="/" element={<RootRedirect />} />
+
+              {/* Fallback */}
+              <Route path="*" element={<RootRedirect />} />
+            </Routes>
+          </div>
+        </div>
+      </Router>
+    </AuthProvider>
+  );
 }
 
-export default App
+export default App;
