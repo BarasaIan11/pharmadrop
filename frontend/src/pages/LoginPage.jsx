@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Cross, Zap, ShieldCheck, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { deliveryAPI } from '../services/api';
+import { Cross, Zap, ShieldCheck, ArrowRight, AlertCircle, Building } from 'lucide-react';
 
 const LoginPage = () => {
   const [activeTab, setActiveTab] = useState('login'); // 'login' | 'register'
@@ -20,11 +21,29 @@ const LoginPage = () => {
     first_name: '',
     last_name: '',
     phone_number: '',
-    role: 'CUSTOMER'
+    role: 'CUSTOMER',
+    pharmacy: ''
   });
 
+  const [pharmacies, setPharmacies] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchPharmacies();
+  }, []);
+
+  const fetchPharmacies = async () => {
+    try {
+      const res = await deliveryAPI.getAvailableRiders(); // or pharmacies API
+      // Fetch pharmacies list
+      const pharmRes = await fetch('/api/pharmacies/').then(r => r.json());
+      const data = pharmRes.results || pharmRes;
+      if (Array.isArray(data)) setPharmacies(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
@@ -66,41 +85,51 @@ const LoginPage = () => {
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row bg-slate-50 font-sans">
-      {/* Left Deep Teal Panel (Matching image.png Mockup) */}
-      <div className="lg:w-1/2 bg-[#024F46] text-white p-8 lg:p-16 flex flex-col justify-between relative overflow-hidden">
-        {/* Background Dot Grid Pattern */}
+      {/* Left Panel with Real High-Res Medical Logistics Image & Deep Teal Overlay */}
+      <div className="lg:w-1/2 relative flex flex-col justify-between p-8 lg:p-16 overflow-hidden min-h-[400px] lg:min-h-screen">
+        {/* Background Image */}
+        <img
+          src="https://images.unsplash.com/photo-1586015555751-63bb77f4322a?auto=format&fit=crop&w=1600&q=80"
+          alt="Medical Logistics & Pharmacy Delivery"
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+
+        {/* Deep Teal Glassmorphism Overlay */}
+        <div className="absolute inset-0 bg-[#024F46]/85 backdrop-blur-xs" />
+
+        {/* Dot Matrix Pattern Accent */}
         <div 
-          className="absolute inset-0 opacity-10 pointer-events-none" 
+          className="absolute inset-0 opacity-15 pointer-events-none" 
           style={{ backgroundImage: 'radial-gradient(circle, #ffffff 1px, transparent 1px)', backgroundSize: '24px 24px' }} 
         />
 
         {/* Top Logo */}
-        <div className="flex items-center space-x-2 z-10">
-          <div className="w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center border border-white/20">
-            <Cross className="w-5 h-5 text-teal-300 stroke-[2.5]" />
+        <div className="flex items-center space-x-3 z-10">
+          <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center border border-white/20 shadow-md">
+            <Cross className="w-6 h-6 text-teal-300 stroke-[2.5]" />
           </div>
-          <span className="text-2xl font-bold tracking-tight text-white">PharmaDrop</span>
+          <span className="text-2xl font-black tracking-tight text-white">PharmaDrop</span>
         </div>
 
         {/* Middle Hero Section */}
         <div className="my-12 z-10 max-w-lg">
-          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight mb-6">
+          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight mb-6 drop-shadow-sm">
             Know where every delivery stands.
           </h1>
-          <p className="text-teal-100/80 text-lg leading-relaxed font-normal">
-            Clinical precision and local reliability for medical logistics across Kenya.
+          <p className="text-teal-100/90 text-lg leading-relaxed font-normal">
+            Clinical precision, multi-tenant pharmacy operations, and local reliability for medical logistics across Kenya.
           </p>
         </div>
 
         {/* Bottom Feature Badges */}
         <div className="flex items-center space-x-4 z-10">
-          <div className="bg-white/10 backdrop-blur-md border border-white/15 rounded-xl p-4 flex flex-col justify-between w-36">
-            <Zap className="w-5 h-5 text-teal-300 mb-2" />
-            <span className="text-xs font-semibold text-white">Fast Dispatch</span>
+          <div className="bg-white/15 backdrop-blur-md border border-white/20 rounded-2xl p-4 flex flex-col justify-between w-40 shadow-lg">
+            <Zap className="w-6 h-6 text-teal-300 mb-2" />
+            <span className="text-xs font-bold text-white">Fast Dispatch</span>
           </div>
-          <div className="bg-white/10 backdrop-blur-md border border-white/15 rounded-xl p-4 flex flex-col justify-between w-36">
-            <ShieldCheck className="w-5 h-5 text-teal-300 mb-2" />
-            <span className="text-xs font-semibold text-white">Secure Chain</span>
+          <div className="bg-white/15 backdrop-blur-md border border-white/20 rounded-2xl p-4 flex flex-col justify-between w-40 shadow-lg">
+            <ShieldCheck className="w-6 h-6 text-teal-300 mb-2" />
+            <span className="text-xs font-bold text-white">Secure Chain</span>
           </div>
         </div>
       </div>
@@ -114,7 +143,7 @@ const LoginPage = () => {
               onClick={() => { setActiveTab('login'); setError(''); }}
               className={`pb-3 px-6 font-medium text-sm transition-all border-b-2 ${
                 activeTab === 'login'
-                  ? 'border-[#005C53] text-[#005C53] font-semibold'
+                  ? 'border-[#005C53] text-[#005C53] font-bold'
                   : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
             >
@@ -124,7 +153,7 @@ const LoginPage = () => {
               onClick={() => { setActiveTab('register'); setError(''); }}
               className={`pb-3 px-6 font-medium text-sm transition-all border-b-2 ${
                 activeTab === 'register'
-                  ? 'border-[#005C53] text-[#005C53] font-semibold'
+                  ? 'border-[#005C53] text-[#005C53] font-bold'
                   : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
             >
@@ -133,7 +162,7 @@ const LoginPage = () => {
           </div>
 
           {error && (
-            <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs flex items-center space-x-2">
+            <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{error}</span>
             </div>
@@ -148,15 +177,15 @@ const LoginPage = () => {
               <form onSubmit={handleLoginSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Email or Phone
+                    Email or Username
                   </label>
                   <input
                     type="text"
                     required
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Enter your email or phone (e.g. customer1)"
-                    className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-600 focus:border-teal-600 outline-none bg-white"
+                    placeholder="Enter email or username (e.g. customer1)"
+                    className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-600 focus:border-teal-600 outline-none bg-white"
                   />
                 </div>
 
@@ -175,14 +204,14 @@ const LoginPage = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-600 focus:border-teal-600 outline-none bg-white"
+                    className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-600 focus:border-teal-600 outline-none bg-white"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 px-4 bg-[#004D40] hover:bg-[#00382E] text-white font-medium rounded-lg text-sm transition-colors flex items-center justify-center space-x-2 shadow-sm"
+                  className="w-full py-3.5 px-4 bg-[#004D40] hover:bg-[#00382E] text-white font-bold rounded-xl text-sm transition-colors flex items-center justify-center space-x-2 shadow-md"
                 >
                   <span>{loading ? 'Logging in...' : 'Log In'}</span>
                   <ArrowRight className="w-4 h-4" />
@@ -197,13 +226,11 @@ const LoginPage = () => {
 
               <form onSubmit={handleRegisterSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    User Role
-                  </label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">User Role</label>
                   <select
                     value={regData.role}
                     onChange={(e) => setRegData({ ...regData, role: e.target.value })}
-                    className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-600 outline-none bg-white"
+                    className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-600 outline-none bg-white"
                   >
                     <option value="CUSTOMER">Customer (Track my medicine)</option>
                     <option value="PHARMACY_STAFF">Pharmacy Staff (Create dispatches)</option>
@@ -211,6 +238,25 @@ const LoginPage = () => {
                     <option value="RIDER">Rider (Deliver orders)</option>
                   </select>
                 </div>
+
+                {regData.role !== 'CUSTOMER' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center space-x-1">
+                      <Building className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Pharmacy Station</span>
+                    </label>
+                    <select
+                      value={regData.pharmacy}
+                      onChange={(e) => setRegData({ ...regData, pharmacy: e.target.value })}
+                      className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-600 outline-none bg-white"
+                    >
+                      <option value="">Select Pharmacy Station...</option>
+                      {pharmacies.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name} ({p.code})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -221,7 +267,7 @@ const LoginPage = () => {
                       value={regData.first_name}
                       onChange={(e) => setRegData({ ...regData, first_name: e.target.value })}
                       placeholder="Jane"
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white outline-none"
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white outline-none"
                     />
                   </div>
                   <div>
@@ -232,7 +278,7 @@ const LoginPage = () => {
                       value={regData.last_name}
                       onChange={(e) => setRegData({ ...regData, last_name: e.target.value })}
                       placeholder="Doe"
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white outline-none"
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white outline-none"
                     />
                   </div>
                 </div>
@@ -245,7 +291,7 @@ const LoginPage = () => {
                     value={regData.username}
                     onChange={(e) => setRegData({ ...regData, username: e.target.value })}
                     placeholder="janedoe"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white outline-none"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white outline-none"
                   />
                 </div>
 
@@ -257,7 +303,7 @@ const LoginPage = () => {
                     value={regData.phone_number}
                     onChange={(e) => setRegData({ ...regData, phone_number: e.target.value })}
                     placeholder="+254712345678"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white outline-none"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white outline-none"
                   />
                 </div>
 
@@ -269,14 +315,14 @@ const LoginPage = () => {
                     value={regData.password}
                     onChange={(e) => setRegData({ ...regData, password: e.target.value })}
                     placeholder="••••••••"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white outline-none"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white outline-none"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 px-4 bg-[#004D40] hover:bg-[#00382E] text-white font-medium rounded-lg text-sm transition-colors flex items-center justify-center space-x-2 shadow-sm"
+                  className="w-full py-3.5 px-4 bg-[#004D40] hover:bg-[#00382E] text-white font-bold rounded-xl text-sm transition-colors flex items-center justify-center space-x-2 shadow-md"
                 >
                   <span>{loading ? 'Creating Account...' : 'Create Account'}</span>
                   <ArrowRight className="w-4 h-4" />
