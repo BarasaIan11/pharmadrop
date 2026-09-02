@@ -44,10 +44,12 @@ export const deliveryAPI = {
   getDeliveryById: (id) => API.get(`/deliveries/${id}/`),
   createDelivery: (data) => API.post('/deliveries/', data),
   assignRider: (id, riderId) => API.post(`/deliveries/${id}/assign/`, { rider_id: riderId }),
-  updateStatus: (id, status) => API.post(`/deliveries/${id}/update-status/`, { status }),
+  updateDeliveryStatus: (id, status) => API.post(`/deliveries/${id}/update-status/`, { status }),
+  updateStatus: (id, status) => API.post(`/deliveries/${id}/update-status/`, { status }), // alias
   confirmDelivery: (id, code) => API.post(`/deliveries/${id}/confirm-delivery/`, { code }),
   cancelDelivery: (id, reason) => API.post(`/deliveries/${id}/cancel/`, { reason }),
   getAvailableRiders: () => API.get('/riders/available/'),
+  getPharmacies: () => API.get('/pharmacies/'),
 };
 
 export default API;

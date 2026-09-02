@@ -1,496 +1,308 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { deliveryAPI } from '../services/api';
-import { 
-  Cross, LayoutDashboard, Truck, Package, Bike, BarChart2, Settings, HelpCircle, 
-  Search, Bell, User, Clock, MapPin, ArrowRight, X, Check, ChevronRight, ChevronLeft, Filter 
+import {
+  Bell, Cross, Users, Bike, ChevronDown, Search, MapPin, Clock,
+  AlertTriangle, CheckCircle2, PackageCheck, Thermometer, RefreshCw, X, UserCheck
 } from 'lucide-react';
 
+const statusColors = {
+  PENDING: 'bg-amber-50 text-amber-800 border border-amber-200',
+  ASSIGNED: 'bg-teal-50 text-teal-800 border border-teal-200',
+  PICKED_UP: 'bg-blue-50 text-blue-800 border border-blue-200',
+  OUT_FOR_DELIVERY: 'bg-violet-50 text-violet-800 border border-violet-200',
+  DELIVERED: 'bg-emerald-50 text-emerald-800 border border-emerald-200',
+  CANCELLED: 'bg-red-50 text-red-800 border border-red-200',
+};
+
 const DispatcherDashboard = () => {
-  const [activeTab, setActiveTab] = useState('unassigned'); // 'unassigned' | 'all'
-  const [statusFilter, setStatusFilter] = useState('All');
   const [deliveries, setDeliveries] = useState([]);
   const [riders, setRiders] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [assigning, setAssigning] = useState(null); // delivery id being assigned
+  const [selectedRider, setSelectedRider] = useState({});
+  const [statusFilter, setStatusFilter] = useState('PENDING');
   const [searchQuery, setSearchQuery] = useState('');
-  const [riderFilter, setRiderFilter] = useState('');
 
-  // Assign Modal State
-  const [assignModalOpen, setAssignModalOpen] = useState(false);
-  const [selectedDelivery, setSelectedDelivery] = useState(null);
-  const [selectedRiderId, setSelectedRiderId] = useState('');
-  const [assigning, setAssigning] = useState(false);
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [delRes, riderRes] = await Promise.all([
-        deliveryAPI.getDeliveries(),
-        deliveryAPI.getAvailableRiders()
+      const [deliveriesRes, ridersRes] = await Promise.all([
+        deliveryAPI.getDeliveries(statusFilter !== 'all' ? { status: statusFilter } : {}),
+        deliveryAPI.getAvailableRiders(),
       ]);
-      setDeliveries(delRes.data.results || delRes.data);
-      setRiders(riderRes.data || []);
-    } catch (err) {
-      console.error('Failed to fetch dispatcher data:', err);
+      const deliveriesData = deliveriesRes.data.results || deliveriesRes.data;
+      const ridersData = ridersRes.data.results || ridersRes.data;
+      setDeliveries(Array.isArray(deliveriesData) ? deliveriesData : []);
+      setRiders(Array.isArray(ridersData) ? ridersData : []);
+    } catch (e) {
+      console.error('Fetch dispatcher data error:', e);
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter]);
 
-  const handleOpenAssignModal = (delivery) => {
-    setSelectedDelivery(delivery);
-    setSelectedRiderId(riders[0]?.user?.id || '');
-    setAssignModalOpen(true);
-  };
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 30000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
 
-  const handleConfirmAssignment = async () => {
-    if (!selectedDelivery || !selectedRiderId) return;
-    setAssigning(true);
+  const handleAssign = async (deliveryId) => {
+    const riderId = selectedRider[deliveryId];
+    if (!riderId) return;
+    setAssigning(deliveryId);
     try {
-      await deliveryAPI.assignRider(selectedDelivery.id, selectedRiderId);
-      setAssignModalOpen(false);
-      setSelectedDelivery(null);
-      fetchData();
-    } catch (err) {
-      console.error('Assignment error:', err);
-      alert(err.response?.data?.error || 'Failed to assign rider');
+      await deliveryAPI.assignRider(deliveryId, riderId);
+      await fetchData();
+    } catch (e) {
+      console.error('Assign rider error:', e);
     } finally {
-      setAssigning(false);
+      setAssigning(null);
+      setSelectedRider((prev) => ({ ...prev, [deliveryId]: '' }));
     }
   };
 
-  const unassignedQueue = deliveries.filter((d) => d.status === 'PENDING');
-  
-  const filteredAllDeliveries = deliveries.filter((d) => {
-    const matchesSearch = 
-      d.order_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.delivery_address.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    if (statusFilter === 'All') return matchesSearch;
-    if (statusFilter === 'Pending') return matchesSearch && d.status === 'PENDING';
-    if (statusFilter === 'Assigned') return matchesSearch && d.status === 'ASSIGNED';
-    if (statusFilter === 'Picked Up') return matchesSearch && d.status === 'PICKED_UP';
-    if (statusFilter === 'In Transit') return matchesSearch && d.status === 'OUT_FOR_DELIVERY';
-    if (statusFilter === 'Delivered') return matchesSearch && d.status === 'DELIVERED';
-    return matchesSearch;
-  });
+  const handleCancel = async (deliveryId) => {
+    if (!window.confirm('Are you sure you want to cancel this order?')) return;
+    try {
+      await deliveryAPI.cancelDelivery(deliveryId, 'Cancelled by dispatcher');
+      fetchData();
+    } catch (e) {
+      console.error('Cancel delivery error:', e);
+    }
+  };
 
-  const filteredRiders = riders.filter((r) => 
-    r.user?.full_name?.toLowerCase().includes(riderFilter.toLowerCase()) ||
-    r.user?.username?.toLowerCase().includes(riderFilter.toLowerCase())
+  const filtered = deliveries.filter(d =>
+    d.order_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    d.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    d.item_description?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const pendingCount = deliveries.filter(d => d.status === 'PENDING').length;
+  const assignedCount = deliveries.filter(d => d.status === 'ASSIGNED').length;
+  const inTransitCount = deliveries.filter(d => d.status === 'OUT_FOR_DELIVERY').length;
+  const availableRidersCount = riders.filter(r => r.is_available).length;
+
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex font-sans text-slate-800">
-      
-      {/* SIDEBAR NAVIGATION (Matching image_5.png & image_7.png) */}
-      <aside className="w-64 bg-slate-50 border-r border-slate-200 flex flex-col justify-between p-4 shrink-0">
-        <div>
-          <div className="flex items-center space-x-2 px-2 py-3 mb-6">
-            <div className="w-8 h-8 rounded-full bg-[#005C53] text-white flex items-center justify-center font-bold text-sm">
-              D
-            </div>
-            <div>
-              <h4 className="text-sm font-bold text-slate-900 leading-tight">Dispatcher Hub</h4>
-              <p className="text-[11px] text-slate-500">Nairobi Central</p>
-            </div>
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans text-slate-800">
+      {/* HEADER */}
+      <header className="bg-white border-b border-slate-200 py-4 px-6 lg:px-12 flex items-center justify-between sticky top-0 z-30 shadow-xs">
+        <div className="flex items-center space-x-3">
+          <div className="w-9 h-9 rounded-xl bg-[#005C53] text-white flex items-center justify-center shadow-sm">
+            <Cross className="w-5 h-5 stroke-[2.5]" />
           </div>
-
-          <button
-            onClick={() => setActiveTab('unassigned')}
-            className="w-full py-2.5 px-4 bg-[#004D40] hover:bg-[#00382E] text-white font-semibold text-xs rounded-lg flex items-center justify-center space-x-2 transition-colors shadow-sm mb-6"
-          >
-            <span>+ New Dispatch</span>
-          </button>
-
-          <nav className="space-y-1">
-            <button
-              onClick={() => setActiveTab('unassigned')}
-              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                activeTab === 'unassigned'
-                  ? 'bg-[#005C53] text-white font-semibold shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-200/60'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Dashboard</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('all')}
-              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                activeTab === 'all'
-                  ? 'bg-[#005C53] text-white font-semibold shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-200/60'
-              }`}
-            >
-              <Truck className="w-4 h-4" />
-              <span>Active Orders</span>
-            </button>
-
-            <button className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-200/60">
-              <Package className="w-4 h-4" />
-              <span>Inventory</span>
-            </button>
-
-            <button className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-200/60">
-              <Bike className="w-4 h-4" />
-              <span>Rider Network</span>
-            </button>
-
-            <button className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-200/60">
-              <BarChart2 className="w-4 h-4" />
-              <span>Reports</span>
-            </button>
-          </nav>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-[#005C53] leading-none">PharmaDrop</h1>
+            <span className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">Dispatcher Portal</span>
+          </div>
         </div>
 
-        <div className="space-y-1 pt-4 border-t border-slate-200">
-          <button className="w-full flex items-center space-x-3 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-200/60 rounded-lg">
-            <Settings className="w-4 h-4" />
-            <span>Settings</span>
-          </button>
-          <button className="w-full flex items-center space-x-3 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-200/60 rounded-lg">
-            <HelpCircle className="w-4 h-4" />
-            <span>Support</span>
-          </button>
+        <div className="hidden md:flex items-center space-x-2">
+          <span className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-full text-xs font-bold">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>{pendingCount} Unassigned</span>
+          </span>
+          <span className="flex items-center space-x-1.5 px-3 py-1.5 bg-teal-50 text-teal-800 border border-teal-200 rounded-full text-xs font-bold">
+            <Bike className="w-3.5 h-3.5" />
+            <span>{availableRidersCount} Riders Available</span>
+          </span>
         </div>
-      </aside>
 
-      {/* MAIN CONTENT AREA */}
-      <div className="flex-1 flex flex-col min-w-0">
-        
-        {/* TOP HEADER BAR */}
-        <header className="bg-white border-b border-slate-200 py-3 px-8 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-[#005C53]">PharmaDrop</h2>
-
-          <div className="flex items-center space-x-4">
-            <div className="relative w-64">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-              <input
-                type="text"
-                placeholder="Search orders..."
-                className="w-full pl-9 pr-4 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#005C53]"
-              />
-            </div>
-            <button className="p-2 text-slate-600 hover:bg-slate-100 rounded-full relative">
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
-            </button>
-            <button className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-full">
-              <User className="w-5 h-5" />
-            </button>
+        <div className="flex items-center space-x-3">
+          <button onClick={fetchData} className="p-2 text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
+            <RefreshCw className="w-4.5 h-4.5" />
+          </button>
+          <button className="p-2 text-slate-600 hover:bg-slate-100 rounded-full relative">
+            <Bell className="w-5 h-5" />
+            {pendingCount > 0 && <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />}
+          </button>
+          <div className="flex items-center space-x-2 pl-2 border-l border-slate-200">
+            <div className="w-8 h-8 rounded-full bg-violet-700 text-white flex items-center justify-center font-bold text-xs">DS</div>
+            <span className="hidden md:inline text-xs font-bold text-slate-800">Dispatcher</span>
           </div>
-        </header>
+        </div>
+      </header>
 
-        {/* VIEW 1: UNASSIGNED QUEUE & AVAILABLE RIDERS SPLIT SCREEN (image_5.png) */}
-        {activeTab === 'unassigned' ? (
-          <main className="flex-1 p-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
-            
-            {/* Left 2 Columns: Unassigned Queue */}
-            <div className="lg:col-span-2 space-y-4">
-              <div className="flex items-center space-x-3 mb-4">
-                <h1 className="text-2xl font-bold text-slate-900">Unassigned Queue</h1>
-                <span className="px-3 py-0.5 bg-slate-200 text-slate-700 text-xs font-bold rounded-full">
-                  {unassignedQueue.length} Pending
-                </span>
+      {/* MAIN */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8">
+        <div className="mb-8">
+          <h2 className="text-2xl lg:text-3xl font-extrabold text-slate-900 tracking-tight">Dispatch Control</h2>
+          <p className="text-xs lg:text-sm text-slate-500 mt-1">Assign riders to pending orders and monitor the live delivery queue.</p>
+        </div>
+
+        {/* Stats Row */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {[
+            { label: 'Unassigned Queue', value: pendingCount, color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', Icon: AlertTriangle },
+            { label: 'Assigned to Rider', value: assignedCount, color: 'text-teal-700', bg: 'bg-teal-50', border: 'border-teal-200', Icon: UserCheck },
+            { label: 'Out for Delivery', value: inTransitCount, color: 'text-violet-700', bg: 'bg-violet-50', border: 'border-violet-200', Icon: PackageCheck },
+            { label: 'Riders Available', value: availableRidersCount, color: 'text-slate-700', bg: 'bg-slate-50', border: 'border-slate-200', Icon: Bike },
+          ].map((s) => (
+            <div key={s.label} className={`${s.bg} border ${s.border} rounded-2xl p-5 flex items-center space-x-4`}>
+              <s.Icon className={`w-7 h-7 ${s.color}`} />
+              <div>
+                <p className="text-2xl font-extrabold text-slate-900">{s.value}</p>
+                <p className="text-xs font-semibold text-slate-500">{s.label}</p>
               </div>
-
-              {unassignedQueue.length === 0 ? (
-                <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center text-slate-400 text-sm">
-                  No unassigned deliveries in queue.
-                </div>
-              ) : (
-                unassignedQueue.map((item) => {
-                  const rawNum = item.order_number.replace('#PD-', '');
-                  return (
-                    <div
-                      key={item.id}
-                      className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden space-y-4 hover:border-teal-500 transition-all"
-                    >
-                      {/* Big Watermark ID (image_5.png) */}
-                      <span className="absolute right-6 top-3 text-6xl font-black text-slate-900/10 pointer-events-none tracking-tight select-none">
-                        {rawNum}
-                      </span>
-
-                      {/* Header */}
-                      <div className="flex items-center justify-between pr-20">
-                        <div>
-                          <h3 className="text-xl font-bold text-slate-900">{item.customer_name}</h3>
-                          <p className="text-xs text-slate-500 flex items-center space-x-1 mt-0.5">
-                            <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{item.delivery_address}</span>
-                          </p>
-                        </div>
-
-                        <div className="flex items-center space-x-1 text-red-600 text-xs font-bold">
-                          <Clock className="w-4 h-4" />
-                          <span>14m waiting</span>
-                        </div>
-                      </div>
-
-                      {/* Package contents section */}
-                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                            PACKAGE CONTENTS
-                          </span>
-                          <div className="flex items-center space-x-2">
-                            <p className="text-sm font-semibold text-slate-800">{item.item_description}</p>
-                            {item.is_cold_chain && (
-                              <span className="px-2 py-0.5 bg-sky-100 text-sky-800 text-[10px] font-bold rounded">
-                                Cold Chain
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => handleOpenAssignModal(item)}
-                          className="py-2.5 px-5 bg-[#004D40] hover:bg-[#00382E] text-white font-bold text-xs rounded-xl flex items-center space-x-2 transition-colors shadow-sm"
-                        >
-                          <span>Assign Rider</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
             </div>
+          ))}
+        </div>
 
-            {/* Right Column: Available Riders Sidebar (image_5.png) */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm h-fit space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-bold text-slate-900">Available Riders</h3>
-                <span className="px-2.5 py-0.5 bg-teal-100 text-teal-800 text-xs font-bold rounded-full">
-                  {riders.length} Online
-                </span>
-              </div>
-
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
+          {/* LEFT: Delivery Queue Panel */}
+          <div className="xl:col-span-8">
+            {/* Filters + Search */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   type="text"
-                  value={riderFilter}
-                  onChange={(e) => setRiderFilter(e.target.value)}
-                  placeholder="Filter riders..."
-                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#005C53]"
+                  placeholder="Search by order, patient, or medication..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 text-sm border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-teal-500 outline-none"
                 />
               </div>
+              <div className="flex space-x-2">
+                {['PENDING', 'ASSIGNED', 'all'].map((s) => (
+                  <button key={s}
+                    onClick={() => setStatusFilter(s)}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition-colors border ${
+                      statusFilter === s ? 'bg-[#004D40] text-white border-[#004D40]' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                    }`}>
+                    {s === 'all' ? 'All' : s.charAt(0) + s.slice(1).toLowerCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-              {/* Rider List */}
-              <div className="space-y-3 pt-1">
-                {filteredRiders.map((r) => (
-                  <div key={r.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between hover:bg-slate-100/80 transition-colors">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 rounded-full bg-teal-700 text-white flex items-center justify-center font-bold text-xs shrink-0">
-                        {r.user?.first_name?.[0] || 'R'}{r.user?.last_name?.[0] || '1'}
+            <div className="space-y-4">
+              {loading ? (
+                <div className="bg-white rounded-2xl p-12 text-center border border-slate-200 text-slate-400 text-xs">Loading queue...</div>
+              ) : filtered.length === 0 ? (
+                <div className="bg-white rounded-2xl p-12 text-center border border-slate-200 text-slate-400 text-xs">No deliveries found in queue.</div>
+              ) : (
+                filtered.map((delivery) => (
+                  <div key={delivery.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="flex items-center flex-wrap gap-2 mb-2">
+                          <span className="text-base font-bold text-slate-900">{delivery.order_number}</span>
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${statusColors[delivery.status]}`}>
+                            {delivery.status?.replace(/_/g, ' ')}
+                          </span>
+                          {delivery.is_cold_chain && (
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-bold rounded-md border border-blue-200">
+                              <Thermometer className="w-3 h-3" />
+                              <span>COLD CHAIN</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-sm font-semibold text-slate-700 mb-1">{delivery.item_description}</p>
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                          <span className="font-semibold text-slate-800">{delivery.customer_name}</span>
+                          <span>•</span>
+                          <span>{delivery.customer_phone}</span>
+                          <span className="flex items-center space-x-1">
+                            <MapPin className="w-3 h-3" />
+                            <span className="line-clamp-1">{delivery.delivery_address}</span>
+                          </span>
+                        </div>
+
+                        {delivery.assigned_rider_detail?.full_name && (
+                          <div className="mt-2 flex items-center space-x-1.5 text-xs text-teal-800 bg-teal-50 px-2.5 py-1 rounded-full w-fit border border-teal-100">
+                            <Bike className="w-3.5 h-3.5" />
+                            <span className="font-bold">{delivery.assigned_rider_detail.full_name}</span>
+                          </div>
+                        )}
                       </div>
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-900">{r.user?.full_name || r.user?.username}</h4>
-                        <p className="text-[11px] text-slate-500 flex items-center space-x-1">
-                          <Bike className="w-3 h-3 text-slate-400" />
-                          <span>{r.vehicle_type} • {r.distance_km}km away</span>
+
+                      {/* Assign Panel */}
+                      {delivery.status !== 'DELIVERED' && delivery.status !== 'CANCELLED' && (
+                        <div className="flex items-center space-x-2 shrink-0 w-full sm:w-auto">
+                          <select
+                            value={selectedRider[delivery.id] || ''}
+                            onChange={(e) => setSelectedRider((prev) => ({ ...prev, [delivery.id]: e.target.value }))}
+                            className="flex-1 sm:w-48 px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white outline-none focus:ring-2 focus:ring-teal-500"
+                          >
+                            <option value="">
+                              {delivery.status === 'ASSIGNED' ? 'Reassign rider...' : 'Select rider...'}
+                            </option>
+                            {riders.map((r) => (
+                              <option key={r.id} value={r.user?.id}>
+                                {r.user?.full_name || r.user?.username} ({r.active_tasks_count} tasks · ⭐{r.rating})
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => handleAssign(delivery.id)}
+                            disabled={!selectedRider[delivery.id] || assigning === delivery.id}
+                            className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+                              selectedRider[delivery.id]
+                                ? 'bg-[#004D40] hover:bg-[#00382E] text-white shadow-sm'
+                                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                            }`}
+                          >
+                            {assigning === delivery.id ? '...' : delivery.status === 'ASSIGNED' ? 'Reassign' : 'Assign'}
+                          </button>
+                          <button
+                            onClick={() => handleCancel(delivery.id)}
+                            className="p-2 text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                            title="Cancel Order"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT: Rider Fleet Panel */}
+          <div className="xl:col-span-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+              <h3 className="font-bold text-slate-900 text-base mb-4 flex items-center space-x-2">
+                <Users className="w-5 h-5 text-[#005C53]" />
+                <span>Rider Fleet</span>
+                <span className="ml-auto text-xs font-semibold text-slate-400">{riders.length} total</span>
+              </h3>
+              <div className="space-y-3">
+                {riders.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-6">No riders found.</p>
+                ) : (
+                  riders.map((rider) => (
+                    <div key={rider.id} className="flex items-center space-x-3 p-3 bg-slate-50/70 rounded-xl border border-slate-100">
+                      <div className="w-9 h-9 rounded-full bg-[#005C53] text-white flex items-center justify-center font-bold text-xs shrink-0">
+                        {(rider.user?.full_name || rider.user?.username || '?').charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-900 text-xs truncate">
+                          {rider.user?.full_name || rider.user?.username}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {rider.vehicle_type} · {rider.active_tasks_count} active task{rider.active_tasks_count !== 1 ? 's' : ''} · ⭐{rider.rating}
                         </p>
                       </div>
+                      <span className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        rider.is_available
+                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                          : 'bg-red-50 text-red-700 border border-red-200'
+                      }`}>
+                        {rider.is_available ? 'Available' : 'Busy'}
+                      </span>
                     </div>
-
-                    <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${
-                      r.active_tasks_count > 0 ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-700'
-                    }`}>
-                      {r.active_tasks_count} active
-                    </span>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
-            </div>
-          </main>
-        ) : (
-
-          /* VIEW 2: ALL DELIVERIES TABLE (image_7.png) */
-          <main className="flex-1 p-8">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h1 className="text-2xl font-bold text-slate-900 mb-1">All Deliveries</h1>
-                <p className="text-xs text-slate-500">Live oversight of regional operations.</p>
-              </div>
-
-              <div className="flex items-center space-x-3">
-                <div className="relative w-64">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search ID, Rider, Clinic..."
-                    className="w-full pl-9 pr-4 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#005C53]"
-                  />
-                </div>
-                <button className="flex items-center space-x-1.5 px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                  <Filter className="w-3.5 h-3.5" />
-                  <span>Filter</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Filter Tabs (image_7.png) */}
-            <div className="flex border-b border-slate-200 mb-6 space-x-6">
-              {['All', 'Pending', 'Assigned', 'Picked Up', 'In Transit', 'Delivered'].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setStatusFilter(tab)}
-                  className={`pb-3 font-semibold text-xs transition-all border-b-2 ${
-                    statusFilter === tab
-                      ? 'border-[#005C53] text-[#005C53] font-bold'
-                      : 'border-transparent text-slate-500 hover:text-slate-700'
-                  }`}
-                >
-                  {tab} ({deliveries.filter(d => tab === 'All' ? true : d.status.toLowerCase().includes(tab.toLowerCase().replace(' ', '_'))).length})
-                </button>
-              ))}
-            </div>
-
-            {/* Data Table */}
-            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    <th className="py-3.5 px-4">ORDER ID</th>
-                    <th className="py-3.5 px-4">DESTINATION</th>
-                    <th className="py-3.5 px-4">RIDER</th>
-                    <th className="py-3.5 px-4">STATUS</th>
-                    <th className="py-3.5 px-4">CREATED</th>
-                    <th className="py-3.5 px-4 text-right">ACTION</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {filteredAllDeliveries.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-400">
-                        No matching deliveries found.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredAllDeliveries.map((order) => (
-                      <tr key={order.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-4 px-4 font-bold text-[#005C53]">
-                          {order.order_number}
-                        </td>
-                        <td className="py-4 px-4 font-semibold text-slate-900">
-                          {order.delivery_address}
-                        </td>
-                        <td className="py-4 px-4">
-                          {order.assigned_rider_detail ? (
-                            <div className="flex items-center space-x-2">
-                              <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-[10px]">
-                                {order.assigned_rider_detail.first_name?.[0]}{order.assigned_rider_detail.last_name?.[0]}
-                              </div>
-                              <span className="font-semibold text-slate-800">{order.assigned_rider_detail.full_name}</span>
-                            </div>
-                          ) : (
-                            <span className="text-red-500 italic font-medium">Unassigned</span>
-                          )}
-                        </td>
-                        <td className="py-4 px-4">
-                          <span className={`px-2.5 py-1 rounded-full font-bold text-[11px] ${
-                            order.status === 'DELIVERED'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : order.status === 'OUT_FOR_DELIVERY'
-                              ? 'bg-[#005C53]/15 text-[#005C53]'
-                              : order.status === 'PICKED_UP'
-                              ? 'bg-cyan-100 text-cyan-800'
-                              : order.status === 'PENDING'
-                              ? 'bg-rose-100 text-rose-800'
-                              : 'bg-[#005C53]/10 text-teal-800'
-                          }`}>
-                            {order.status}
-                          </span>
-                        </td>
-                        <td className="py-4 px-4 text-slate-500">
-                          {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </td>
-                        <td className="py-4 px-4 text-right">
-                          <button className="p-1 text-slate-400 hover:text-slate-700">
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-
-              <div className="py-3 px-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
-                <span>Showing 1-5 of {filteredAllDeliveries.length} deliveries</span>
-                <div className="flex items-center space-x-2">
-                  <button className="p-1 text-slate-400 hover:text-slate-600 border rounded">
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button className="p-1 text-slate-400 hover:text-slate-600 border rounded">
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </main>
-        )}
-      </div>
-
-      {/* ASSIGN RIDER MODAL */}
-      {assignModalOpen && selectedDelivery && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-lg font-bold text-slate-900">
-                Assign Rider to Order {selectedDelivery.order_number}
-              </h3>
-              <button onClick={() => setAssignModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-600">
-              Select an available rider to deliver <strong>{selectedDelivery.item_description}</strong> to {selectedDelivery.delivery_address}.
-            </p>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-2">Available Rider</label>
-              <select
-                value={selectedRiderId}
-                onChange={(e) => setSelectedRiderId(e.target.value)}
-                className="w-full p-3 text-sm border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#005C53] bg-white"
-              >
-                {riders.map((r) => (
-                  <option key={r.user.id} value={r.user.id}>
-                    {r.user.full_name || r.user.username} ({r.vehicle_type} • {r.distance_km}km away • {r.active_tasks_count} active tasks)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-100">
-              <button
-                onClick={() => setAssignModalOpen(false)}
-                className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmAssignment}
-                disabled={assigning}
-                className="px-5 py-2 bg-[#004D40] hover:bg-[#00382E] text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
-              >
-                {assigning ? 'Assigning...' : 'Confirm Assignment'}
-              </button>
             </div>
           </div>
         </div>
-      )}
+      </main>
     </div>
   );
 };

@@ -35,10 +35,8 @@ const LoginPage = () => {
 
   const fetchPharmacies = async () => {
     try {
-      const res = await deliveryAPI.getAvailableRiders(); // or pharmacies API
-      // Fetch pharmacies list
-      const pharmRes = await fetch('/api/pharmacies/').then(r => r.json());
-      const data = pharmRes.results || pharmRes;
+      const res = await deliveryAPI.getPharmacies();
+      const data = res.data.results || res.data;
       if (Array.isArray(data)) setPharmacies(data);
     } catch (e) {
       console.error(e);

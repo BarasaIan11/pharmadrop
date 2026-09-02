@@ -1,406 +1,318 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
 import { deliveryAPI } from '../services/api';
-import { 
-  Bell, User, RefreshCw, ChevronLeft, Phone, MapPin, Clock, Info, Check, 
-  Package, Bike, CheckCircle2, Cross, HelpCircle, Home, Receipt, Map, AlertTriangle 
+import {
+  Bell, Cross, MapPin, Phone, CheckCircle2, AlertTriangle,
+  Bike, Clock, ArrowRight, KeyRound, RefreshCw, PackageCheck
 } from 'lucide-react';
 
+const statusColors = {
+  ASSIGNED: 'bg-teal-50 text-teal-800 border border-teal-200',
+  PICKED_UP: 'bg-blue-50 text-blue-800 border border-blue-200',
+  OUT_FOR_DELIVERY: 'bg-violet-50 text-violet-800 border border-violet-200',
+};
+
+const VALID_TRANSITIONS = {
+  ASSIGNED: { next: 'PICKED_UP', label: 'Mark as Picked Up' },
+  PICKED_UP: { next: 'OUT_FOR_DELIVERY', label: 'Mark as Out for Delivery' },
+  OUT_FOR_DELIVERY: { next: null, label: 'Confirm Delivery (requires PIN)' },
+};
+
 const RiderDashboard = () => {
-  const { id } = useParams();
-  const navigate = useNavigate();
-
   const [deliveries, setDeliveries] = useState([]);
+  const [selectedDelivery, setSelectedDelivery] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [selectedTask, setSelectedTask] = useState(null);
-
-  // 4-digit PIN State (image_8.png)
-  const [pinDigits, setPinDigits] = useState(['', '', '', '']);
+  const [updating, setUpdating] = useState(false);
+  const [pinCode, setPinCode] = useState('');
   const [pinError, setPinError] = useState('');
-  const [pinSuccess, setPinSuccess] = useState(false);
-  const [submittingPin, setSubmittingPin] = useState(false);
-  const inputRefs = [useRef(null), useRef(null), useRef(null), useRef(null)];
+  const [pinSuccess, setPinSuccess] = useState('');
 
-  useEffect(() => {
-    fetchAssignedTasks();
-  }, [id]);
-
-  const fetchAssignedTasks = async () => {
+  const fetchDeliveries = useCallback(async () => {
     setLoading(true);
     try {
       const res = await deliveryAPI.getDeliveries();
       const data = res.data.results || res.data;
-      setDeliveries(data);
-
-      if (id) {
-        const found = data.find((d) => d.id === id || d.order_number.replace('#PD-', '') === id);
-        if (found) setSelectedTask(found);
+      const active = Array.isArray(data)
+        ? data.filter(d => ['ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY'].includes(d.status))
+        : [];
+      setDeliveries(active);
+      if (active.length > 0 && !selectedDelivery) {
+        setSelectedDelivery(active[0]);
       }
-    } catch (err) {
-      console.error('Failed to fetch rider deliveries:', err);
+    } catch (e) {
+      console.error('Rider fetch error:', e);
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedDelivery]);
 
-  const handleStartPickup = async (task) => {
+  useEffect(() => {
+    fetchDeliveries();
+    const interval = setInterval(fetchDeliveries, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleUpdateStatus = async (delivery, nextStatus) => {
+    setUpdating(true);
     try {
-      await deliveryAPI.updateStatus(task.id, 'PICKED_UP');
-      await deliveryAPI.updateStatus(task.id, 'OUT_FOR_DELIVERY');
-      fetchAssignedTasks();
-    } catch (err) {
-      console.error('Status update failed:', err);
-      alert(err.response?.data?.error || 'Failed to update status');
+      await deliveryAPI.updateDeliveryStatus(delivery.id, nextStatus);
+      await fetchDeliveries();
+      const updated = deliveries.find(d => d.id === delivery.id);
+      if (updated) setSelectedDelivery({ ...updated, status: nextStatus });
+    } catch (e) {
+      console.error('Status update error:', e);
+    } finally {
+      setUpdating(false);
     }
   };
 
-  const handleOpenPinModal = (task) => {
-    setSelectedTask(task);
-    setPinDigits(['', '', '', '']);
-    setPinError('');
-    setPinSuccess(false);
-  };
-
-  const handlePinChange = (index, value) => {
-    if (value.length > 1) value = value.slice(-1);
-    const newDigits = [...pinDigits];
-    newDigits[index] = value;
-    setPinDigits(newDigits);
-
-    // Auto-advance focus to next input
-    if (value && index < 3) {
-      inputRefs[index + 1].current?.focus();
-    }
-  };
-
-  const handleKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && !pinDigits[index] && index > 0) {
-      inputRefs[index - 1].current?.focus();
-    }
-  };
-
-  const handleConfirmPIN = async () => {
-    const fullPin = pinDigits.join('');
-    if (fullPin.length !== 4) {
-      setPinError('Please enter all 4 digits of the code.');
+  const handleConfirmDelivery = async (deliveryId) => {
+    if (!pinCode || pinCode.length !== 4) {
+      setPinError('Please enter a 4-digit PIN code');
       return;
     }
-
-    setSubmittingPin(true);
     setPinError('');
-
+    setUpdating(true);
     try {
-      const res = await deliveryAPI.confirmDelivery(selectedTask.id, fullPin);
-      setPinSuccess(true);
-      setTimeout(() => {
-        setSelectedTask(null);
-        fetchAssignedTasks();
-      }, 1500);
-    } catch (err) {
-      console.error('PIN verification error:', err);
-      const errData = err.response?.data;
-      if (errData?.is_locked) {
-        setPinError('ORDER LOCKED! 3 failed code attempts. Dispatcher review required.');
-      } else {
-        setPinError(errData?.error || `Incorrect code. Attempt ${errData?.failed_attempts || '?'}/3 failed.`);
-      }
+      await deliveryAPI.confirmDelivery(deliveryId, pinCode);
+      setPinSuccess('Delivery confirmed! ✅');
+      setPinCode('');
+      await fetchDeliveries();
+      setTimeout(() => setPinSuccess(''), 3000);
+    } catch (e) {
+      const errMsg = e?.response?.data?.error || 'Incorrect code. Try again.';
+      setPinError(errMsg);
+      const updatedDeliveries = await deliveryAPI.getDeliveries();
+      const data = updatedDeliveries.data.results || updatedDeliveries.data;
+      const updated = Array.isArray(data) ? data.find(d => d.id === deliveryId) : null;
+      if (updated) setSelectedDelivery(updated);
     } finally {
-      setSubmittingPin(false);
+      setUpdating(false);
     }
   };
 
-  const activeTasks = deliveries.filter((d) => d.status !== 'DELIVERED' && d.status !== 'CANCELLED');
+  const completedCount = 5; // placeholder — could come from separate API call
 
   return (
-    <div className="max-w-md mx-auto min-h-screen bg-[#F9FAFB] flex flex-col justify-between font-sans border-x border-slate-200 shadow-xl relative pb-20">
-      
-      {/* SCREEN 1: 4-DIGIT PIN CONFIRMATION MODAL / PAGE (image_8.png) */}
-      {selectedTask ? (
-        <div className="flex-1 p-6 flex flex-col justify-between">
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans text-slate-800">
+      {/* HEADER */}
+      <header className="bg-white border-b border-slate-200 py-4 px-6 lg:px-12 flex items-center justify-between sticky top-0 z-30 shadow-xs">
+        <div className="flex items-center space-x-3">
+          <div className="w-9 h-9 rounded-xl bg-[#005C53] text-white flex items-center justify-center shadow-sm">
+            <Cross className="w-5 h-5 stroke-[2.5]" />
+          </div>
           <div>
-            {/* Header */}
-            <div className="flex items-center justify-between py-2 mb-6">
-              <button
-                onClick={() => setSelectedTask(null)}
-                className="p-2 text-slate-700 hover:bg-slate-200/60 rounded-full transition-colors"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-              <h1 className="text-xl font-bold text-[#005C53]">Confirm Delivery</h1>
-              <div className="w-8" />
-            </div>
-
-            {/* Top Center Icon */}
-            <div className="flex justify-center mb-6">
-              <div className="w-20 h-20 rounded-full bg-slate-200/70 flex items-center justify-center text-[#005C53]">
-                <Cross className="w-10 h-10 stroke-[2.5]" />
-              </div>
-            </div>
-
-            {/* Verification Required Banner */}
-            <div className="text-center mb-8">
-              <h2 className="text-2xl font-extrabold text-slate-900 mb-2">
-                Verification Required
-              </h2>
-              <p className="text-sm text-slate-500 max-w-xs mx-auto">
-                Ask the customer for their 4-digit confirmation code.
-              </p>
-            </div>
-
-            {/* Order Info Card */}
-            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex items-center justify-between mb-8">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
-                  <User className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-slate-900 text-sm">
-                    Order {selectedTask.order_number}
-                  </h4>
-                  <p className="text-xs text-slate-400">Awaiting Handover</p>
-                </div>
-              </div>
-              <span className="px-3 py-1 bg-teal-50 text-teal-800 font-bold text-xs rounded-full border border-teal-100">
-                ARRIVED
-              </span>
-            </div>
-
-            {/* 4-Box PIN Input (Matching image_8.png mockup) */}
-            <div className="flex justify-center space-x-3 mb-6">
-              {pinDigits.map((digit, index) => (
-                <input
-                  key={index}
-                  ref={inputRefs[index]}
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={digit}
-                  onChange={(e) => handlePinChange(index, e.target.value)}
-                  onKeyDown={(e) => handleKeyDown(index, e)}
-                  className={`w-14 h-16 text-center text-2xl font-black rounded-2xl border-2 outline-none transition-all ${
-                    pinError
-                      ? 'border-red-400 bg-red-50 text-red-900'
-                      : digit
-                      ? 'border-[#005C53] bg-teal-50/50 text-slate-900'
-                      : index === 0
-                      ? 'border-red-400 ring-2 ring-red-100 bg-white'
-                      : 'border-slate-300 bg-white'
-                  }`}
-                />
-              ))}
-            </div>
-
-            {/* PIN Error / Success Notifications */}
-            {pinError && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-semibold text-center flex items-center justify-center space-x-1.5">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>{pinError}</span>
-              </div>
-            )}
-
-            {pinSuccess && (
-              <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold text-center flex items-center justify-center space-x-1.5">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                <span>Code Verified! Order Delivered.</span>
-              </div>
-            )}
-
-            {/* Help Link */}
-            <div className="text-center">
-              <button
-                type="button"
-                onClick={() => alert("Ask customer to open PharmaDrop app to view their 4-digit code under Order Details.")}
-                className="text-xs font-bold text-[#005C53] inline-flex items-center space-x-1 hover:underline"
-              >
-                <HelpCircle className="w-4 h-4" />
-                <span>Customer doesn't have a code</span>
-              </button>
-            </div>
+            <h1 className="text-xl font-bold tracking-tight text-[#005C53] leading-none">PharmaDrop</h1>
+            <span className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">Rider Portal</span>
           </div>
-
-          {/* Bottom Action Button */}
-          <button
-            onClick={handleConfirmPIN}
-            disabled={submittingPin || pinSuccess}
-            className="w-full py-4 bg-[#005C53] hover:bg-[#004D40] text-white font-bold text-base rounded-2xl flex items-center justify-center space-x-2 transition-colors shadow-md mt-8 disabled:opacity-50"
-          >
-            <Check className="w-5 h-5 stroke-[3]" />
-            <span>{submittingPin ? 'Verifying...' : 'Confirm Delivery'}</span>
-          </button>
         </div>
-      ) : (
 
-        /* SCREEN 2: RIDER ACTIVE TASKS LIST (image_6.png) */
-        <div className="flex-1 p-4">
-          {/* Header */}
-          <div className="flex items-center justify-between py-3 mb-4">
-            <h1 className="text-2xl font-black text-[#005C53] tracking-tight">
-              PharmaDrop
-            </h1>
-            <div className="flex items-center space-x-3">
-              <button className="p-2 text-slate-600 hover:bg-slate-200/60 rounded-full relative">
-                <Bell className="w-6 h-6" />
-              </button>
-              <button className="p-2 text-slate-600 hover:bg-slate-200/60 rounded-full">
-                <User className="w-6 h-6" />
-              </button>
-            </div>
+        <div className="hidden md:flex items-center space-x-2">
+          <span className="flex items-center space-x-1.5 px-3 py-1.5 bg-teal-50 text-teal-800 border border-teal-200 rounded-full text-xs font-bold">
+            <Bike className="w-3.5 h-3.5" />
+            <span>{deliveries.length} Active Task{deliveries.length !== 1 ? 's' : ''}</span>
+          </span>
+          <span className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-xs font-bold">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>{completedCount} Completed Today</span>
+          </span>
+        </div>
+
+        <div className="flex items-center space-x-3">
+          <button onClick={fetchDeliveries} className="p-2 text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
+            <RefreshCw className="w-4.5 h-4.5" />
+          </button>
+          <button className="p-2 text-slate-600 hover:bg-slate-100 rounded-full relative">
+            <Bell className="w-5 h-5" />
+            {deliveries.length > 0 && <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />}
+          </button>
+          <div className="flex items-center space-x-2 pl-2 border-l border-slate-200">
+            <div className="w-8 h-8 rounded-full bg-emerald-700 text-white flex items-center justify-center font-bold text-xs">DK</div>
+            <span className="hidden md:inline text-xs font-bold text-slate-800">David Kamau</span>
           </div>
+        </div>
+      </header>
 
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">My Deliveries</h2>
-              <p className="text-xs text-slate-500">{activeTasks.length} Active Tasks</p>
-            </div>
-            <button
-              onClick={fetchAssignedTasks}
-              className="p-2 text-[#005C53] hover:bg-teal-50 border border-teal-200 rounded-full transition-colors"
-            >
-              <RefreshCw className="w-5 h-5" />
-            </button>
+      {/* MAIN */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8">
+        <div className="mb-8">
+          <h2 className="text-2xl lg:text-3xl font-extrabold text-slate-900 tracking-tight">My Deliveries</h2>
+          <p className="text-xs lg:text-sm text-slate-500 mt-1">Manage active tasks, update progress, and confirm handoff with the patient PIN.</p>
+        </div>
+
+        {loading ? (
+          <div className="bg-white rounded-2xl p-16 text-center border border-slate-200 text-slate-400 text-sm">
+            Loading your delivery tasks...
           </div>
-
-          {/* Task Cards List */}
-          <div className="space-y-5">
-            {loading ? (
-              <div className="p-8 text-center text-slate-400 text-sm">Loading tasks...</div>
-            ) : activeTasks.length === 0 ? (
-              <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center text-slate-400 text-sm">
-                No active delivery tasks assigned to you.
-              </div>
-            ) : (
-              activeTasks.map((task) => {
-                const rawNum = task.order_number.replace('#PD-', '');
+        ) : deliveries.length === 0 ? (
+          <div className="bg-white rounded-2xl p-16 text-center border border-slate-200">
+            <PackageCheck className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <p className="text-slate-700 font-bold text-lg">No Active Deliveries</p>
+            <p className="text-xs text-slate-400 mt-2">You're all caught up! New tasks will appear here when the dispatcher assigns them.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            {/* LEFT: Task List (lg:col-span-5) */}
+            <div className="lg:col-span-5 space-y-4">
+              <h3 className="font-bold text-slate-900 text-base mb-2">Active Tasks ({deliveries.length})</h3>
+              {deliveries.map((delivery) => {
+                const isSelected = selectedDelivery?.id === delivery.id;
                 return (
                   <div
-                    key={task.id}
-                    className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm relative overflow-hidden space-y-4"
+                    key={delivery.id}
+                    onClick={() => { setSelectedDelivery(delivery); setPinCode(''); setPinError(''); setPinSuccess(''); }}
+                    className={`bg-white rounded-2xl border p-5 cursor-pointer transition-all shadow-sm ${
+                      isSelected
+                        ? 'border-[#005C53] ring-2 ring-teal-600/20 shadow-md'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
                   >
-                    {/* Big Watermark ID (image_6.png) */}
-                    <span className="absolute right-4 top-2 text-6xl font-black text-slate-900/10 pointer-events-none tracking-tight select-none">
-                      {rawNum}
-                    </span>
-
-                    {/* Status Pill Header */}
-                    <div className="flex items-center justify-between pr-20">
-                      {task.status === 'ASSIGNED' ? (
-                        <span className="inline-flex items-center space-x-1.5 px-3 py-1 bg-teal-50 text-teal-800 font-bold text-xs rounded-full border border-teal-100">
-                          <Package className="w-3.5 h-3.5" />
-                          <span>ASSIGNED</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center space-x-1.5 px-3 py-1 bg-[#005C53] text-white font-bold text-xs rounded-full shadow-sm">
-                          <Bike className="w-3.5 h-3.5" />
-                          <span>OUT FOR DELIVERY</span>
-                        </span>
-                      )}
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-base font-bold text-slate-900">{delivery.order_number}</span>
+                      <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${statusColors[delivery.status] || 'bg-slate-100 text-slate-700'}`}>
+                        {delivery.status?.replace(/_/g, ' ')}
+                      </span>
                     </div>
-
-                    {/* Route Steps Timeline (Pickup -> Dropoff) */}
-                    <div className="space-y-3 pt-1">
-                      {task.status === 'ASSIGNED' && (
-                        <div className="flex items-start space-x-3">
-                          <div className="w-3 h-3 rounded-full border-2 border-teal-700 bg-white mt-1 shrink-0" />
-                          <div>
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                              PICKUP
-                            </span>
-                            <h4 className="text-sm font-bold text-slate-900">{task.pickup_address}</h4>
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="flex items-start space-x-3">
-                        <div className="w-3 h-3 rounded-full bg-teal-700 mt-1 shrink-0" />
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                            DROPOFF
-                          </span>
-                          <h4 className="text-sm font-bold text-slate-900">{task.delivery_address}</h4>
-                        </div>
-                      </div>
+                    <p className="text-sm font-semibold text-slate-700 mb-2">{delivery.item_description}</p>
+                    <div className="flex items-start space-x-1.5 text-xs text-slate-500">
+                      <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5 text-slate-400" />
+                      <span className="line-clamp-2">{delivery.delivery_address}</span>
                     </div>
-
-                    {/* Customer Note Callout Box (image_6.png) */}
-                    {task.customer_note && (
-                      <div className="p-3 bg-slate-100/80 rounded-xl border border-slate-200/80 flex items-start space-x-2 text-xs text-slate-700">
-                        <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-                        <p className="italic">{task.customer_note}</p>
-                      </div>
-                    )}
-
-                    {/* Meta info & Action Buttons */}
-                    <div className="pt-2 border-t border-slate-100">
-                      {task.status === 'ASSIGNED' ? (
-                        <div>
-                          <div className="flex items-center space-x-4 text-xs font-semibold text-slate-600 mb-3">
-                            <span className="text-red-600 flex items-center space-x-1">
-                              <Clock className="w-3.5 h-3.5" />
-                              <span>12 mins away</span>
-                            </span>
-                            <span>4.2 km</span>
-                          </div>
-
-                          <button
-                            onClick={() => handleStartPickup(task)}
-                            className="w-full py-3 bg-[#004D40] hover:bg-[#00382E] text-white font-bold text-sm rounded-xl flex items-center justify-center space-x-2 transition-colors shadow-sm"
-                          >
-                            <Bike className="w-4 h-4" />
-                            <span>Start Pickup</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center space-x-3">
-                          <a
-                            href={`tel:${task.customer_phone || '+254712345678'}`}
-                            className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 transition-colors"
-                          >
-                            <Phone className="w-4 h-4" />
-                            <span>Call</span>
-                          </a>
-
-                          <button
-                            onClick={() => handleOpenPinModal(task)}
-                            className="flex-2 py-3 bg-[#004D40] hover:bg-[#00382E] text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 transition-colors shadow-sm"
-                          >
-                            <Check className="w-4 h-4 stroke-[3]" />
-                            <span>Mark Delivered</span>
-                          </button>
-                        </div>
-                      )}
+                    <div className="flex items-center space-x-1.5 text-xs text-slate-500 mt-1.5">
+                      <Phone className="w-3 h-3 text-slate-400" />
+                      <span>{delivery.customer_phone}</span>
                     </div>
                   </div>
                 );
-              })
-            )}
+              })}
+            </div>
+
+            {/* RIGHT: Task Detail & Action Panel (lg:col-span-7) */}
+            <div className="lg:col-span-7">
+              {selectedDelivery ? (
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 lg:p-8 shadow-sm">
+                  {/* Detail Header */}
+                  <div className="pb-5 mb-6 border-b border-slate-100">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">Current Task</span>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-2xl font-bold text-slate-900">{selectedDelivery.order_number}</h3>
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${statusColors[selectedDelivery.status] || 'bg-slate-100 text-slate-700'}`}>
+                        {selectedDelivery.status?.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Item + Address */}
+                  <div className="space-y-4 mb-6">
+                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Medication</p>
+                      <p className="text-base font-bold text-slate-900">{selectedDelivery.item_description}</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="flex items-start space-x-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                        <div className="p-2 bg-teal-100/60 text-[#005C53] rounded-xl shrink-0">
+                          <MapPin className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">DELIVER TO</p>
+                          <p className="text-xs font-semibold text-slate-800 leading-snug">{selectedDelivery.delivery_address}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start space-x-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                        <div className="p-2 bg-teal-100/60 text-[#005C53] rounded-xl shrink-0">
+                          <Phone className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">CONTACT</p>
+                          <p className="text-sm font-bold text-slate-900">{selectedDelivery.customer_phone}</p>
+                          <p className="text-xs text-slate-500">{selectedDelivery.customer_name}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {selectedDelivery.customer_note && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                        <p className="text-xs font-bold text-amber-800 mb-1">⚠ Patient Note</p>
+                        <p className="text-xs text-amber-900">{selectedDelivery.customer_note}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Status Progression Button */}
+                  {VALID_TRANSITIONS[selectedDelivery.status] && selectedDelivery.status !== 'OUT_FOR_DELIVERY' && (
+                    <button
+                      onClick={() => handleUpdateStatus(selectedDelivery, VALID_TRANSITIONS[selectedDelivery.status].next)}
+                      disabled={updating}
+                      className="w-full py-4 bg-[#004D40] hover:bg-[#00382E] text-white font-bold rounded-2xl text-sm flex items-center justify-center space-x-2 transition-colors shadow-md mb-4"
+                    >
+                      <span>{updating ? 'Updating...' : VALID_TRANSITIONS[selectedDelivery.status].label}</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* PIN CONFIRMATION PANEL */}
+                  {selectedDelivery.status === 'OUT_FOR_DELIVERY' && (
+                    <div className="bg-[#FFF0F3] border border-pink-200 rounded-3xl p-6 mt-2">
+                      <div className="flex items-center space-x-2 mb-4">
+                        <KeyRound className="w-5 h-5 text-rose-700" />
+                        <h4 className="font-bold text-rose-900 text-base">Enter Customer's 4-Digit Code</h4>
+                      </div>
+                      <p className="text-xs text-rose-800/90 mb-4">
+                        Ask the customer for the 4-digit code visible in their PharmaDrop app to confirm handoff.
+                      </p>
+
+                      <div className="flex items-center space-x-3">
+                        <input
+                          type="text"
+                          maxLength={4}
+                          value={pinCode}
+                          onChange={(e) => { setPinCode(e.target.value.replace(/\D/g, '')); setPinError(''); }}
+                          placeholder="_ _ _ _"
+                          className="flex-1 text-center text-3xl font-black tracking-[0.5em] py-3 border-2 border-pink-300 rounded-2xl bg-white focus:ring-2 focus:ring-rose-500 outline-none text-rose-800 font-mono"
+                        />
+                        <button
+                          onClick={() => handleConfirmDelivery(selectedDelivery.id)}
+                          disabled={updating || pinCode.length !== 4}
+                          className={`px-6 py-4 rounded-2xl font-bold text-sm transition-colors ${
+                            pinCode.length === 4
+                              ? 'bg-rose-700 hover:bg-rose-800 text-white shadow-md'
+                              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                          }`}
+                        >
+                          {updating ? '...' : 'Confirm'}
+                        </button>
+                      </div>
+
+                      {pinError && (
+                        <div className="mt-3 flex items-center space-x-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>{pinError}</span>
+                          {selectedDelivery.failed_code_attempts > 0 && (
+                            <span className="ml-auto font-bold">
+                              {selectedDelivery.failed_code_attempts}/3 attempts
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {pinSuccess && (
+                        <div className="mt-3 flex items-center space-x-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>{pinSuccess}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-white rounded-3xl border border-slate-200 p-16 text-center text-slate-400 text-sm shadow-sm">
+                  Select a delivery task on the left to view details and take action.
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* MOBILE BOTTOM NAVIGATION BAR */}
-      <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-slate-200 py-2 px-6 flex justify-between items-center shadow-lg z-40">
-        <button className="flex flex-col items-center text-slate-500 hover:text-teal-700">
-          <Home className="w-5 h-5" />
-          <span className="text-[10px] font-medium mt-1">Home</span>
-        </button>
-
-        <button className="flex flex-col items-center">
-          <div className="bg-[#005C53] text-white px-5 py-1.5 rounded-full flex items-center space-x-1 shadow-sm">
-            <Receipt className="w-4 h-4" />
-            <span className="text-xs font-bold">Orders</span>
-          </div>
-        </button>
-
-        <button className="flex flex-col items-center text-slate-500 hover:text-teal-700">
-          <Map className="w-5 h-5" />
-          <span className="text-[10px] font-medium mt-1">Track</span>
-        </button>
-
-        <button className="flex flex-col items-center text-slate-500 hover:text-teal-700">
-          <User className="w-5 h-5" />
-          <span className="text-[10px] font-medium mt-1">Profile</span>
-        </button>
-      </div>
+        )}
+      </main>
     </div>
   );
 };
