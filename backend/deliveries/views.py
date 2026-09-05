@@ -2,6 +2,7 @@ from rest_framework import generics, viewsets, status, permissions
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
+from django.conf import settings
 
 from .models import User, Pharmacy, RiderProfile, Delivery, DeliveryStatusEvent, UserRole, DeliveryStatus
 from .permissions import IsPharmacyStaff, IsDispatcher, IsRider, IsCustomer, IsAssignedRider
@@ -17,11 +18,11 @@ def broadcast_realtime_event(delivery_obj, event_name='status_updated'):
     try:
         import pusher
         pusher_client = pusher.Pusher(
-            app_id='1700000',
-            key='pharmadrop-key',
-            secret='pharmadrop-secret',
-            cluster='mt1',
-            ssl=True
+            app_id=settings.PUSHER_APP_ID,
+            key=settings.PUSHER_KEY,
+            secret=settings.PUSHER_SECRET,
+            cluster=settings.PUSHER_CLUSTER,
+            ssl=settings.PUSHER_SSL,
         )
         data = DeliverySerializer(delivery_obj).data
         pharmacy_id = str(delivery_obj.pharmacy_id) if delivery_obj.pharmacy_id else 'global'

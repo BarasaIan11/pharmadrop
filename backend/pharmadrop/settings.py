@@ -141,3 +141,9 @@ USE_TZ = True
 # Static files
 STATIC_URL = 'static/'
 
+# Pusher Channels Real-Time Delivery Status Events
+PUSHER_APP_ID  = '2191539'
+PUSHER_KEY     = '6db43e8b66ea4c73a67e'
+PUSHER_SECRET  = 'b6de4e3b1433a15b0efc'
+PUSHER_CLUSTER = 'mt1'
+PUSHER_SSL     = True 
