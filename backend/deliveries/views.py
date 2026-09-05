@@ -15,6 +15,8 @@ from .serializers import (
 
 def broadcast_realtime_event(delivery_obj, event_name='status_updated'):
     """Pusher real-time status event trigger with safe fallback"""
+    if not all([settings.PUSHER_APP_ID, settings.PUSHER_KEY, settings.PUSHER_SECRET]):
+        return
     try:
         import pusher
         pusher_client = pusher.Pusher(
@@ -26,10 +28,9 @@ def broadcast_realtime_event(delivery_obj, event_name='status_updated'):
         )
         data = DeliverySerializer(delivery_obj).data
         pharmacy_id = str(delivery_obj.pharmacy_id) if delivery_obj.pharmacy_id else 'global'
-        pusher_client.trigger(f'pharmacy-{pharmacy_id}', event_name, data)
-        pusher_client.trigger('pharmadrop-global', event_name, data)
-    except Exception as e:
-        pass
+        pusher_client.trigger(f'private-pharmacy-{pharmacy_id}', event_name, data)
+    except Exception:
+        return
 
 
 class PharmacyViewSet(viewsets.ReadOnlyModelViewSet):
@@ -46,6 +47,25 @@ class RegisterView(generics.CreateAPIView):
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def pusher_auth_view(request):
+    """Authorize a user only for their own pharmacy's private Pusher channel."""
+    socket_id = request.data.get('socket_id')
+    channel_name = request.data.get('channel_name', '')
+    expected_channel = f'private-pharmacy-{request.user.pharmacy_id}'
+    if not socket_id or not request.user.pharmacy_id or channel_name != expected_channel:
+        return Response({'detail': 'Not authorized for this channel.'}, status=status.HTTP_403_FORBIDDEN)
+    if not all([settings.PUSHER_APP_ID, settings.PUSHER_KEY, settings.PUSHER_SECRET]):
+        return Response({'detail': 'Realtime delivery updates are not configured.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    import pusher
+    client = pusher.Pusher(
+        app_id=settings.PUSHER_APP_ID, key=settings.PUSHER_KEY,
+        secret=settings.PUSHER_SECRET, cluster=settings.PUSHER_CLUSTER, ssl=settings.PUSHER_SSL,
+    )
+    return Response(client.authenticate(channel=channel_name, socket_id=socket_id))
 
 
 @api_view(['GET'])
@@ -81,20 +101,14 @@ class DeliveryViewSet(viewsets.ModelViewSet):
 
         queryset = Delivery.objects.all()
         status_param = self.request.query_params.get('status')
-        pharmacy_param = self.request.query_params.get('pharmacy')
 
         if status_param and status_param.lower() != 'all':
             queryset = queryset.filter(status__iexact=status_param)
 
-        if pharmacy_param:
-            queryset = queryset.filter(pharmacy_id=pharmacy_param)
-
         if user.role == UserRole.CUSTOMER:
             return queryset.filter(customer=user)
         elif user.role in [UserRole.PHARMACY_STAFF, UserRole.DISPATCHER, UserRole.RIDER]:
-            if user.pharmacy and not pharmacy_param:
-                return queryset.filter(pharmacy=user.pharmacy)
-            return queryset
+            return queryset.filter(pharmacy=user.pharmacy) if user.pharmacy else Delivery.objects.none()
 
         return queryset
 
@@ -126,6 +140,8 @@ class DeliveryViewSet(viewsets.ModelViewSet):
             rider = User.objects.get(id=rider_id, role=UserRole.RIDER)
         except User.DoesNotExist:
             return Response({"error": "Valid Rider not found"}, status=status.HTTP_404_NOT_FOUND)
+        if rider.pharmacy_id != delivery.pharmacy_id:
+            return Response({"error": "Rider belongs to another pharmacy"}, status=status.HTTP_400_BAD_REQUEST)
 
         old_rider = delivery.assigned_rider
         delivery.assigned_rider = rider

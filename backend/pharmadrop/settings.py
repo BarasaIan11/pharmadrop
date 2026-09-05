@@ -10,10 +10,10 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
-from pathlib import Path
-
 import datetime
+import os
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,12 +23,25 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-zs0iqbv%6wvjx$$j+f2jolqyh_71w82#)&q$h&j$hodl^ip4ha'
+def env_list(name, default=''):
+    return [item.strip() for item in os.getenv(name, default).split(',') if item.strip()]
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+def env_bool(name, default=False):
+    return os.getenv(name, str(default)).lower() in {'1', 'true', 'yes', 'on'}
+
+
+DEBUG = env_bool('DJANGO_DEBUG', False)
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'development-only-secret-key-change-me'
+    else:
+        raise RuntimeError('DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is false.')
+
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1' if DEBUG else '')
+if not DEBUG and not ALLOWED_HOSTS:
+    raise RuntimeError('DJANGO_ALLOWED_HOSTS must be set in production.')
 
 
 # Application definition
@@ -57,6 +70,8 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+if not DEBUG:
+    MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
 
 ROOT_URLCONF = 'pharmadrop.urls'
 
@@ -81,12 +96,25 @@ WSGI_APPLICATION = 'pharmadrop.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+def database_config():
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        if DEBUG:
+            return {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3'}
+        raise RuntimeError('DATABASE_URL must be set in production (use PostgreSQL).')
+    parsed = urlparse(database_url)
+    if parsed.scheme not in {'postgres', 'postgresql'}:
+        raise RuntimeError('DATABASE_URL must use a PostgreSQL URL.')
+    return {
+        'ENGINE': 'django.db.backends.postgresql', 'NAME': parsed.path.lstrip('/'),
+        'USER': unquote(parsed.username or ''), 'PASSWORD': unquote(parsed.password or ''),
+        'HOST': parsed.hostname or '', 'PORT': str(parsed.port or 5432),
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),
+        'OPTIONS': {'sslmode': os.getenv('DB_SSLMODE', 'require')},
     }
-}
+
+
+DATABASES = {'default': database_config()}
 
 
 # Custom User Model
@@ -123,27 +151,43 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': datetime.timedelta(days=7),
-    'REFRESH_TOKEN_LIFETIME': datetime.timedelta(days=30),
+    'ACCESS_TOKEN_LIFETIME': datetime.timedelta(minutes=int(os.getenv('JWT_ACCESS_MINUTES', '15'))),
+    'REFRESH_TOKEN_LIFETIME': datetime.timedelta(days=int(os.getenv('JWT_REFRESH_DAYS', '7'))),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
 # CORS Configuration
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS')
+CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
+if not DEBUG and not CORS_ALLOWED_ORIGINS:
+    raise RuntimeError('CORS_ALLOWED_ORIGINS must be set in production.')
 
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = os.getenv('DJANGO_TIME_ZONE', 'Africa/Nairobi')
 USE_I18N = True
 USE_TZ = True
 
 # Static files
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'}}
+
+SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', not DEBUG)
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000' if not DEBUG else '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+SECURE_HSTS_PRELOAD = not DEBUG
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
+X_FRAME_OPTIONS = 'DENY'
 
 # Pusher Channels Real-Time Delivery Status Events
-PUSHER_APP_ID  = '2191539'
-PUSHER_KEY     = '6db43e8b66ea4c73a67e'
-PUSHER_SECRET  = 'b6de4e3b1433a15b0efc'
-PUSHER_CLUSTER = 'mt1'
+PUSHER_APP_ID = os.getenv('PUSHER_APP_ID', '')
+PUSHER_KEY = os.getenv('PUSHER_KEY', '')
+PUSHER_SECRET = os.getenv('PUSHER_SECRET', '')
+PUSHER_CLUSTER = os.getenv('PUSHER_CLUSTER', 'mt1')
 PUSHER_SSL     = True 

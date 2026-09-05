@@ -1,6 +1,6 @@
 import base64
 import hashlib
-import random
+import secrets
 import uuid
 from django.conf import settings
 from django.db import models
@@ -162,10 +162,9 @@ class Delivery(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.order_number:
-            random_digits = random.randint(1000, 9999)
-            self.order_number = f"#PD-{random_digits}"
+            self.order_number = f"PD-{uuid.uuid4().hex[:12].upper()}"
         if not self.encrypted_code:
-            raw_code = f"{random.randint(1000, 9999)}"
+            raw_code = f"{secrets.randbelow(9000) + 1000}"
             self.confirmation_code = raw_code
         super().save(*args, **kwargs)
 

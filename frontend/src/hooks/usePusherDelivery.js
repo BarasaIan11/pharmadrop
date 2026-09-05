@@ -22,7 +22,7 @@
  *  • If Pusher is not configured (no VITE_PUSHER_KEY), hook returns a no-op
  *    and a pollingEnabled flag so components can fall back to 30-second polling.
  */
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 
 const PUSHER_KEY    = import.meta.env.VITE_PUSHER_KEY    || null;
 const PUSHER_CLUSTER = import.meta.env.VITE_PUSHER_CLUSTER || 'mt1';
@@ -67,12 +67,15 @@ export const usePusherDelivery = ({ pharmacyId, onUpdate }) => {
         const client = new PusherLib(PUSHER_KEY, {
           cluster: PUSHER_CLUSTER,
           forceTLS: true,
+          authEndpoint: `${import.meta.env.VITE_API_BASE_URL || '/api'}/pusher/auth/`,
+          auth: {
+            headers: { Authorization: `Bearer ${localStorage.getItem('access_token') || ''}` },
+          },
         });
 
         pusherRef.current = client;
 
-        const channelNames = ['pharmadrop-global'];
-        if (pharmacyId) channelNames.push(`pharmacy-${pharmacyId}`);
+        const channelNames = pharmacyId ? [`private-pharmacy-${pharmacyId}`] : [];
 
         channelsRef.current = channelNames.map((name) => {
           const ch = client.subscribe(name);

@@ -1,4 +1,4 @@
-import random
+import secrets
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User, Pharmacy, RiderProfile, Delivery, DeliveryStatusEvent, UserRole, DeliveryStatus
@@ -44,6 +44,16 @@ class RegisterSerializer(serializers.ModelSerializer):
         if user.role == UserRole.RIDER:
             RiderProfile.objects.get_or_create(user=user)
         return user
+
+    def validate_role(self, value):
+        if value != UserRole.CUSTOMER:
+            raise serializers.ValidationError("Public registration is limited to customer accounts.")
+        return value
+
+    def validate_pharmacy(self, value):
+        if value is not None:
+            raise serializers.ValidationError("Customers cannot select a pharmacy during registration.")
+        return value
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -104,9 +114,9 @@ class DeliverySerializer(serializers.ModelSerializer):
 
     def get_confirmation_code(self, obj):
         request = self.context.get('request')
-        # Only expose raw decrypted confirmation code if requested by customer or pharmacy staff/dispatcher
+        # Customers can view their own code; staff can share it with the customer.
         if request and request.user.is_authenticated:
-            if request.user.role in [UserRole.CUSTOMER, UserRole.PHARMACY_STAFF, UserRole.DISPATCHER]:
+            if request.user == obj.customer or request.user.role == UserRole.PHARMACY_STAFF:
                 return obj.confirmation_code
         return "****"
 
@@ -131,27 +141,24 @@ class CreateDeliverySerializer(serializers.ModelSerializer):
         pharmacy_param = validated_data.pop('pharmacy', None)
         user = self.context['request'].user
 
-        pharmacy = pharmacy_param or user.pharmacy
+        pharmacy = user.pharmacy
         if not pharmacy:
-            pharmacy = Pharmacy.objects.first()
-        if not pharmacy:
-            pharmacy, _ = Pharmacy.objects.get_or_create(
-                name='Nairobi Central Pharmacy',
-                defaults={'code': 'MED-NRB-01', 'address': 'Aga Khan Univ Hospital', 'phone': '+254700111222'}
-            )
+            raise serializers.ValidationError({"pharmacy": "Your account is not assigned to a pharmacy."})
+        if pharmacy_param and pharmacy_param != pharmacy:
+            raise serializers.ValidationError({"pharmacy": "You cannot create deliveries for another pharmacy."})
 
         if customer_id:
             try:
                 customer = User.objects.get(id=customer_id, role=UserRole.CUSTOMER)
             except User.DoesNotExist:
                 customer = User.objects.create_user(
-                    username=f"customer_{random.randint(1000, 9999)}",
+                    username=f"customer_{secrets.token_hex(6)}",
                     first_name=new_customer_name or 'Customer',
                     role=UserRole.CUSTOMER,
                     phone_number=new_customer_phone
                 )
         elif new_customer_name:
-            username = f"customer_{random.randint(1000, 9999)}"
+            username = f"customer_{secrets.token_hex(6)}"
             customer = User.objects.create_user(
                 username=username,
                 first_name=new_customer_name,
@@ -160,6 +167,8 @@ class CreateDeliverySerializer(serializers.ModelSerializer):
             )
         else:
             customer = User.objects.filter(role=UserRole.CUSTOMER).first()
+        if not customer:
+            raise serializers.ValidationError({"customer": "Provide an existing customer or new customer details."})
 
         delivery = Delivery.objects.create(
             customer=customer,
