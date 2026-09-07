@@ -1,66 +1,100 @@
-# PharmaDrop — Technical Trade-offs & Architectural Decisions
+# PharmaDrop - Technical Trade-offs and Architectural Decisions
 
-This document outlines the three key architectural trade-offs made during the design and implementation of the **PharmaDrop** medicine delivery tracking system MVP.
+This document records the main implementation choices in the current PharmaDrop MVP, including their benefits, limitations, and likely next steps.
 
----
+## 1. Delivery PIN: Reversible encryption vs. one-way hashing
 
-## 1. Confirmation Code Security: Plaintext vs. Hashed Storage
+### Decision
 
-### Decision:
-The 4-digit confirmation code (`confirmation_code`) is generated at creation and stored as a plain text string field on the `Delivery` model rather than hashed (like a password with bcrypt/PBKDF2).
+Each delivery receives a random four-digit confirmation PIN. It is encrypted with Fernet before storage in `Delivery.encrypted_code`; the encryption key is derived from `DJANGO_SECRET_KEY`. The plaintext PIN is revealed only to the order's customer and pharmacy staff through the API. Riders receive `****` and submit the customer-provided PIN to complete delivery.
 
-### Trade-off Rationale:
-* **Pros**: 
-  - Allows customers to view their exact 4-digit code directly on their order detail page (`/customer/orders/:id`) without needing complex reversible encryption keys.
-  - Allows pharmacy staff and dispatchers to verify or troubleshoot missing code situations when a customer calls the station.
-  - Enables simple 4-digit string equality matching (`code == delivery.confirmation_code`) during rider handoff.
-* **Cons**:
-  - Anyone with direct SQL database read access or full administrative permissions can inspect valid codes.
-* **Mitigation**:
-  - The API layer strictly restricts the `confirmation_code` field from being exposed in Rider view endpoints prior to delivery confirmation.
-  - Attempt limiting locks the delivery after 3 failed attempts (`failed_code_attempts >= 3` sets `is_locked = True`), preventing brute-force enumeration attacks.
+### Why this was chosen
 
----
+- A customer needs to retrieve the PIN after delivery creation, which a password-style hash cannot support.
+- Encryption protects the PIN from casual database inspection while retaining handoff verification.
+- Three failed attempts lock the order and create an audit event, limiting online PIN guessing.
 
-## 2. Architecture Scope: Single-Pharmacy MVP vs. Multi-Tenant Model
+### Costs and safeguards
 
-### Decision:
-PharmaDrop is implemented as a single-pharmacy delivery system where all pharmacy staff and dispatchers share a single delivery database namespace, rather than a multi-tenant system with separate `Pharmacy` organization IDs.
+- This is reversible protection: anyone with the encrypted value and Django secret can decrypt the PIN. The secret must be managed and rotated carefully.
+- A four-digit PIN has limited entropy; authentication, role checks, edge rate limiting, and the three-attempt lock remain essential.
+- PIN visibility is deliberately role-specific and must not be added to rider serializers or logs.
 
-### Trade-off Rationale:
-* **Pros**:
-  - Dramatically simplifies permissions, data models, and query filters for the MVP phase.
-  - Eliminates multi-tenant routing, organization subdomains, and tenant isolation middleware complexity.
-  - Focuses 100% of development effort on delivering a complete, robust happy-path delivery workflow across all 4 user roles.
-* **Cons**:
-  - Cannot support multiple competing pharmacy chains on a single hosted instance without data leakage.
-* **Future Upgrade Path**:
-  - Add a `Pharmacy` model and `pharmacy = FK(Pharmacy)` on `User` and `Delivery` models to enforce tenant scoping in DRF querysets.
+### Future direction
 
----
+Use a short-lived, purpose-specific encryption key managed by a KMS, and add a dispatcher-controlled PIN unlock/reissue workflow delivered through a verified customer channel.
 
-## 3. Real-Time Tracking: HTTP REST Polling vs. WebSockets & SMS Integration
+## 2. Pharmacy tenancy: Shared application, pharmacy-scoped records
 
-### Decision:
-The system relies on RESTful HTTP API polling and explicit user actions rather than real-time WebSockets (Django Channels / Pusher) or SMS gateways (Twilio / Africa's Talking).
+### Decision
 
-### Trade-off Rationale:
-* **Pros**:
-  - Zero external third-party API dependencies or paid SMS gateway costs required to run and test the complete system locally.
-  - Avoids Redis / ASGI server deployment overhead (SQLite + standard WSGI DRF server runs seamlessly).
-  - Simple, predictable state machine transitions driven by deterministic API requests.
-* **Cons**:
-  - Customers must refresh or navigate to see instant status changes unless client-side polling interval is enabled.
-  - Customers receive their 4-digit code inside the web app UI rather than via SMS text message.
-* **Future Upgrade Path**:
-  - Integrate an SMS dispatch trigger on `DeliveryStatusEvent` creation (e.g. sending SMS when status changes to `OUT_FOR_DELIVERY` with code).
+Pharmacies are first-class records. Staff, dispatchers, riders, and deliveries link to a `Pharmacy`; operational delivery and available-rider queries are filtered to the authenticated user's pharmacy. Rider assignment also rejects riders from another pharmacy.
 
----
+### Why this was chosen
 
-## Summary Matrix
+- One deployment can serve multiple pharmacy locations or organisations without duplicating the application.
+- The model keeps operational data separated while staying simple enough for a single Django database and DRF query layer.
+- Private Pusher channels use the pharmacy identifier, matching the API data boundary.
 
-| Domain | Selected Approach | High-Scale Production Alternative | Trade-off Benefit |
-| :--- | :--- | :--- | :--- |
-| **Code Security** | Plaintext + 3-Attempt Locking | Short-lived HMAC / Hashed PIN | Simple customer display & instant handoff verification |
-| **Tenancy** | Single-Pharmacy Model | Multi-Tenant Organization FK | Streamlined MVP focus on core happy-path roles |
-| **Live Updates** | DRF REST Endpoints | Django Channels + SMS Gateway | Zero external cost & 100% offline runnable demo |
+### Costs and safeguards
+
+- This is application-level tenancy, not database-per-tenant isolation. An omitted queryset filter could expose cross-pharmacy data.
+- Customers are global user accounts, so their delivery list is scoped by customer rather than pharmacy.
+- Every operational endpoint needs the same pharmacy scope and cross-pharmacy authorization tests.
+
+### Future direction
+
+Centralize tenant scoping in queryset helpers or managers, expand tenant-focused tests, and consider database row-level security or isolated databases when stronger isolation is required.
+
+## 3. Live tracking: Optional Pusher plus REST polling
+
+### Decision
+
+The REST API is the source of truth. When Pusher credentials are configured, the backend publishes delivery events to authenticated, pharmacy-specific private channels. Operational dashboards also refresh delivery data every 30 seconds as a fallback.
+
+### Why this was chosen
+
+- The complete workflow runs locally and in Docker without a message broker or realtime vendor account.
+- Pusher provides near-instant updates without adding Django Channels, Redis, and persistent WebSocket infrastructure.
+- Polling reconciles missed events and remains useful when a realtime connection fails.
+
+### Costs and safeguards
+
+- Pusher is an external dependency when enabled, with vendor cost and availability considerations.
+- Polling trades immediacy for simplicity and creates periodic API load.
+- Events are advisory; clients should refetch data and the API remains authoritative for every state transition.
+
+### Future direction
+
+Add event-delivery and polling observability, tune polling by dashboard visibility, and adopt a queue-backed realtime architecture if operational volume warrants it. Customer notifications should use an opt-in, audited SMS or WhatsApp provider.
+
+## 4. Deployment: Containerized PostgreSQL vs. managed services
+
+### Decision
+
+The reference deployment uses Docker Compose with PostgreSQL, Django/Gunicorn, and an Nginx-served frontend. Django uses SQLite only when `DJANGO_DEBUG=true` and no `DATABASE_URL` is set.
+
+### Why this was chosen
+
+- The stack is reproducible and close to production behavior.
+- PostgreSQL is better suited than SQLite for concurrent operational use.
+- Nginx provides a same-origin `/api/` proxy, reducing browser CORS complexity.
+
+### Costs and safeguards
+
+- A Compose host still needs backups, TLS termination, monitoring, patching, and secrets management.
+- PostgreSQL must not be publicly exposed.
+- `seed_data` deletes application data before recreating demo records, so it is strictly a development/demo command.
+
+### Future direction
+
+Move stateful services to managed PostgreSQL, place the application behind a TLS-enabled load balancer, store secrets in a dedicated manager, and automate backup plus restore testing.
+
+## Summary matrix
+
+| Domain | Current approach | Main benefit | Primary limitation |
+| --- | --- | --- | --- |
+| Delivery PIN | Fernet-encrypted, role-limited four-digit PIN with lockout | Customer can retrieve the PIN without plaintext database storage | Reversible; low PIN entropy |
+| Tenancy | Pharmacy foreign keys and scoped API querysets | Multi-pharmacy operation in one deployment | Isolation depends on correct application enforcement |
+| Live updates | Optional Pusher private channels plus REST polling | Realtime when configured and resilient fallback | Vendor dependency and polling overhead |
+| Deployment | Docker Compose with PostgreSQL | Reproducible, production-like stack | Host operations remain the deployer's responsibility |
